@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package org.openinfralabs.caerus.cache.grpc;
+
+// The Semantic Cache service definition.
+service SemanticCacheService {
+  // Semantic Cache Administrator API. Reservation RPC.
+  rpc reserve (ReservationRequest) returns (PathReply) {}
+  // Semantic Cache Administrator API. Commit reservation RPC.
+  rpc commitReservation (CommitReservationRequest) returns (Ack) {}
+  // Semantic Cache Administrator API. Deletion RPC.
+  rpc delete (DeleteRequest) returns (PathReply) {}
+  // Semantic Cache Administrator API. Commit deletion RPC.
+  rpc free (FreeRequest) returns (Ack) {}
+
+  // Semantic Cache Client API. Registration RPC.
+  rpc register (RegisterRequest) returns (RegisterReply) {}
+  // Semantic Cache Client API. Heartbeat RPC.
+  rpc heartbeat (HeartbeatRequest) returns (Ack) {}
+  // Semantic Cache Client API. Optimization RPC.
+  rpc optimize (OptimizationRequest) returns (OptimizationReply) {}
+
+  // Semantic Cache Administrator Monitoring API. GetStatus RPC
+  rpc getStatus (CacheStatusRequest) returns (CacheStatusReply) {}
+}
+
+message ReservationRequest {
+  string clientId = 1;
+  string candidate = 2;
+  int64 estimatedSize = 3;
+  int32 tier = 4;
+  string name = 5;
+}
+
+message CommitReservationRequest {
+  string clientId = 1;
+  bool commit = 2;
+  string name = 3;
+  int64 realSize = 4;
+}
+
+message DeleteRequest {
+  string clientId = 1;
+  string name = 2;
+}
+
+message FreeRequest {
+  string clientId = 1;
+  string path = 2;
+  int64 realSize = 3;
+}
+
+message PathReply {
+  string path = 1;
+}
+
+message RegisterRequest {
+  string clientId = 1;
+}
+
+message RegisterReply {
+  int64 terminationTimeout = 1;
+}
+
+message HeartbeatRequest {
+  string clientId = 1;
+}
+
+message Ack {}
+
+message OptimizationRequest {
+  string clientId = 1;
+  string caerusPlan = 2;
+}
+
+message OptimizationReply {
+  string optimizedCaerusPlan = 1;
+}
+
+message CacheStatusRequest {
+  string clientId = 1;
+}
+
+message CacheStatusReply {
+  string status = 1;
+}
