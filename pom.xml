@@ -49,6 +49,5 @@
     <module>grpc</module>
     <module>client.spark</module>
     <module>manager</module>
-    <module>examples</module>
   </modules>
 </project>
