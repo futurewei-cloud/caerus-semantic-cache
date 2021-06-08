@@ -138,7 +138,7 @@ val sch = StructType(Array(
   StructField("city", StringType, nullable = true),
   StructField("region", StringType, nullable = true),
   StructField("lat", DoubleType, nullable = true),
-   StructField("lng", DoubleType, nullable = true)))
+  StructField("lng", DoubleType, nullable = true)))
 
 // Create leaf node.
 val loadDF = spark.read.schema(sch).option("header", value = true).csv(inputPath)
