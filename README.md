@@ -28,7 +28,7 @@ ${CAERUS_HOME}/manager/src/main/resources/{manager.conf,log4j.properties}.templa
 ```
 8. Run Semantic Cache Manager by runnning:
 ```
-${SCALA_HOME}/bin/scala ${CAERUS_HOME}/manager/target/manager-0.0.0-jar-with-dependencies.jar <manager.conf>
+${SCALA_HOME}/bin/scala -Dlog4j.configuration=<log4j.properties path> ${CAERUS_HOME}/manager/target/manager-0.0.0-jar-with-dependencies.jar <manager.conf path>
 ```
 9. Use the following option along with Spark when you run a Scala application to have access to Semantic Cache API:
 ```
