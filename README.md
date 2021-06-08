@@ -22,9 +22,9 @@ Scala 2.12.10 (https://www.scala-lang.org/download/2.12.10.html)
 ```
 ${MAVEN_HOME}/bin/mvn clean package
 ```
-7. Configure Semantic Cache Manager with the correct parameters using the following template:
+7. Configure Semantic Cache Manager with the correct parameters using the following templates:
 ```
-${CAERUS_HOME}/manager/src/main/resources/manager.conf.template
+${CAERUS_HOME}/manager/src/main/resources/{manager.conf,log4j.properties}.template
 ```
 8. Run Semantic Cache Manager by runnning:
 ```
@@ -65,4 +65,97 @@ Console.out.println(semanticCache.status)
 ```
 
 ## Semantic Cache Examples
-To be filled soon.
+To run a simple user example using GridPocket data (https://github.com/gridpocket/project-iostack), use the following:
+```
+// Initialize Spark.
+val spark: SparkSession = SparkSession.builder()
+  .master(sparkURI)
+  .appName(name="SemanticCacheExample")
+  .getOrCreate()
+
+// Activate Semantic Cache optimizations.
+SemanticCache.activate(spark, semanticCacheURI)
+
+// Initialize data format.
+val sch = StructType(Array(
+  StructField("vid", StringType, nullable = true),
+  StructField("date", TimestampType, nullable = true),
+  StructField("index", DoubleType, nullable = true),
+  StructField("sumHC", DoubleType, nullable = true),
+  StructField("sumHP", DoubleType, nullable = true),
+  StructField("type", StringType, nullable = true),
+  StructField("size", IntegerType, nullable = true),
+  StructField("temp", DoubleType, nullable = true),
+  StructField("city", StringType, nullable = true),
+  StructField("region", StringType, nullable = true),
+  StructField("lat", DoubleType, nullable = true),
+  StructField("lng", DoubleType, nullable = true)))
+
+// Create leaf node.
+val loadDF = spark.read.schema(sch).option("header", value = true).csv(inputPath)
+
+// Run queries.
+loadDF.createOrReplaceTempView("meter")
+val q1 = "SELECT * FROM meter WHERE temp >= 9.0 AND temp < 12.0"
+val q2 = "SELECT vid,city FROM meter WHERE temp >= 9.0 AND temp < 12.0"
+val q3 = "SELECT city, avg(temp) as avg_temp FROM meter WHERE temp >= 9.0 AND temp < 12.0 GROUP BY city"
+
+val q1DF = spark.sql(q1)
+val q2DF = spark.sql(q2)
+val q3DF = spark.sql(q3)
+
+q1DF.explain(mode = "extended")
+q2DF.explain(mode = "extended")
+q3DF.explain(mode = "extended")
+
+q1DF.write.csv(outputPath + "/example1.csv")
+q2DF.write.csv(outputPath + "/example2.csv")
+q3DF.write.csv(outputPath + "/example3.csv")
+spark.stop()
+```
+
+To fill the cache with contents, the Write API should be used. Here is an example of performing repartitioning on GridPocket data on the attribute of temperature:
+```
+// Initialize Spark.
+val spark: SparkSession = SparkSession.builder()
+  .master(sparkURI)
+  .appName(name="SemanticCacheRepartitioning")
+  .getOrCreate()
+
+// Initialize Semantic Cache connector.
+val semanticCache = new SemanticCache(spark, semanticCacheURI)
+
+// Initialize data format.
+val sch = StructType(Array(
+  StructField("vid", StringType, nullable = true),
+  StructField("date", TimestampType, nullable = true),
+  StructField("index", DoubleType, nullable = true),
+  StructField("sumHC", DoubleType, nullable = true),
+  StructField("sumHP", DoubleType, nullable = true),
+  StructField("type", StringType, nullable = true),
+  StructField("size", IntegerType, nullable = true),
+  StructField("temp", DoubleType, nullable = true),
+  StructField("city", StringType, nullable = true),
+  StructField("region", StringType, nullable = true),
+  StructField("lat", DoubleType, nullable = true),
+   StructField("lng", DoubleType, nullable = true)))
+
+// Create leaf node.
+val loadDF = spark.read.schema(sch).option("header", value = true).csv(inputPath)
+
+// Cache repartition content.
+val bytesWritten = semanticCache.repartitioning(loadDF, partitionAttribute=attributeName, Tier.STORAGE_DISK, name=repartitionName)
+assert(bytesWritten > 0L)
+Console.out.println(semanticCache.status)
+spark.stop()
+```
+
+After the repartitioning content is created, the initial leaf node changes in the Optimized Logical Plan for all three queries from
+```
++- Relation[vid#0,date#1,index#2,sumHC#3,sumHP#4,type#5,size#6,temp#7,city#8,region#9,lat#10,lng#11] csv
+```
+to
+```
++- Relation[vid#0,date#1,index#2,sumHC#3,sumHP#4,type#5,size#6,temp#7,city#8,region#9,lat#10,lng#11] parquet
+```
+revealing changes in the optimization process from Semantic Cache. The ensuing Physical Plan reveals even further information (files that are loaded) if printed.
