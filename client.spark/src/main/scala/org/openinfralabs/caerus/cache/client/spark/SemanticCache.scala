@@ -94,9 +94,8 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
     }
   }
 
-  private def transform(inputPlan: LogicalPlan): CaerusPlan = {
-    var plan: CaerusPlan = inputPlan.canonicalized
-    plan = plan match {
+  private def transformCanonicalized(plan: LogicalPlan): CaerusPlan = {
+    val caerusPlan = plan match {
       case LogicalRelation(hadoopFsRelation: HadoopFsRelation, output, _, _) =>
         if (!hadoopFsRelation.fileFormat.isInstanceOf[DataSourceRegister]) {
           logger.warn("Format provided for Data-Skipping Indices is not supported. Format: %s\n"
@@ -109,9 +108,15 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
         val format: String = hadoopFsRelation.fileFormat.asInstanceOf[DataSourceRegister].shortName()
         CaerusSourceLoad(output, inputs, format)
       case _ =>
-        inputPlan.withNewChildren(inputPlan.children.map(transform))
+        plan.withNewChildren(plan.children.map(transformCanonicalized))
     }
-    transformAttributesInPlan(plan)
+    transformAttributesInPlan(caerusPlan)
+  }
+
+  private def transform(plan: LogicalPlan): CaerusPlan = {
+    val canonicalizedPlan: CaerusPlan = plan.canonicalized
+    logger.debug("Canonicalized Spark Plan:\n%s".format(canonicalizedPlan))
+    transformCanonicalized(canonicalizedPlan)
   }
 
   private def pullUpUnion(plan: LogicalPlan): LogicalPlan = {
