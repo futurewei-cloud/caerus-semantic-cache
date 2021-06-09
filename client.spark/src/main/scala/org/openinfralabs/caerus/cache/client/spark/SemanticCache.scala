@@ -64,11 +64,13 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
     (host, port)
   }
 
-  private def getIndex(expression: NamedExpression) = expression.exprId.id.toInt
+  private def getIndex(ref: AttributeReference) = ref.exprId.id.toInt
 
-  private def transformAttributesInExpression(expression: Expression): Expression = expression match {
-    case namedExpression: NamedExpression => CaerusAttribute(getIndex(namedExpression), namedExpression.dataType)
-    case _ => expression.withNewChildren(expression.children.map(transformAttributesInExpression))
+  private def transformAttributesInExpression(expression: Expression): Expression = {
+    expression match {
+      case ref: AttributeReference => CaerusAttribute(getIndex(ref), ref.dataType)
+      case _ => expression.withNewChildren(expression.children.map(transformAttributesInExpression))
+    }
   }
 
   private def transformAttributesInPlan(plan: CaerusPlan): CaerusPlan = {
@@ -151,10 +153,10 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
     ))
   }
 
-  private def transformConditionBack(condition: Expression, output: Seq[Attribute]): Expression = {
-    condition match {
-      case namedExpression: NamedExpression => output(getIndex(namedExpression))
-      case _ => condition.withNewChildren(condition.children.map(transformConditionBack(_, output)))
+  private def transformExpressionBack(expr: Expression, output: Seq[Attribute]): Expression = {
+    expr match {
+      case ref: AttributeReference => output(getIndex(ref))
+      case _ => expr.withNewChildren(expr.children.map(transformExpressionBack(_, output)))
     }
   }
 
@@ -242,19 +244,20 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
         logger.info("New CaerusSourceLoad:\n%s".format(newSourceLoad))
         transformBack(newSourceLoad, logicalRelation, sourceLoad)
       case Project(projectList, child) =>
-        val newChild: LogicalPlan =
-            inputPlan match {
-              case project: Project => transformBack(child, project.child, inputCaerusPlan.asInstanceOf[Project].child)
-              case _ => transformBack(child, inputPlan, inputCaerusPlan)
-            }
-        Project(projectList.map(namedExpression => newChild.output(getIndex(namedExpression))), newChild)
+        val newChild: LogicalPlan = inputPlan match {
+          case project: Project => transformBack(child, project.child, inputCaerusPlan.asInstanceOf[Project].child)
+          case _ => transformBack(child, inputPlan, inputCaerusPlan)
+        }
+        val newProjectList: Seq[NamedExpression] =
+          projectList.map(transformExpressionBack(_, newChild.output).asInstanceOf[NamedExpression])
+        Project(newProjectList, newChild)
       case Filter(condition, child) =>
         val newChild: LogicalPlan =
           inputPlan match {
             case filter: Filter => transformBack(child, filter.child, inputCaerusPlan.asInstanceOf[Filter].child)
             case _ => transformBack(child, inputPlan, inputCaerusPlan)
           }
-        val newCondition: Expression = transformConditionBack(condition, newChild.output)
+        val newCondition: Expression = transformExpressionBack(condition, newChild.output)
         Filter(newCondition, newChild)
       case _ =>
         assert(inputPlan.children.size == outputCaerusPlan.children.size)
