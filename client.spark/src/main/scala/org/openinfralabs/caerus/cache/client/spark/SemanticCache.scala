@@ -64,7 +64,7 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
     (host, port)
   }
 
-  private def getIndex(ref: AttributeReference) = ref.exprId.id.toInt
+  private def getIndex(attrib: Attribute) = attrib.exprId.id.toInt
 
   private def transformAttributesInExpression(expression: Expression): Expression = {
     expression match {
@@ -85,6 +85,11 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
         val newCondition: Expression = transformAttributesInExpression(condition)
         val newChild: CaerusPlan = transformAttributesInPlan(child)
         Filter(newCondition, newChild)
+      case Project(projectList, child) =>
+        val newProjectList: Seq[NamedExpression] =
+          projectList.map(transformAttributesInExpression(_).asInstanceOf[NamedExpression])
+        val newChild: CaerusPlan = transformAttributesInPlan(child)
+        Project(newProjectList, newChild)
       case RepartitionByExpression(partitionExpressions, child, numPartitions) =>
         val newPartitionExpressions: Seq[Expression] = partitionExpressions.map(transformAttributesInExpression)
         val newChild: CaerusPlan = transformAttributesInPlan(child)
@@ -154,8 +159,9 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
   }
 
   private def transformExpressionBack(expr: Expression, output: Seq[Attribute]): Expression = {
+    logger.debug("Expression: %s --- Output: %s --- Class: %s".format(expr, output, expr.getClass.getName))
     expr match {
-      case ref: AttributeReference => output(getIndex(ref))
+      case caerusAttrib: CaerusAttribute => output(getIndex(caerusAttrib))
       case _ => expr.withNewChildren(expr.children.map(transformExpressionBack(_, output)))
     }
   }
