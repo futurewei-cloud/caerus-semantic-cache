@@ -320,7 +320,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
       references(request.clientId) = Set.empty[String]
-      Future.successful(RegisterReply(timeout))
+      Future.successful(RegisterReply(timeout*60000))
     }
 
     /**
