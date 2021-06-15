@@ -64,7 +64,7 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
     (host, port)
   }
 
-  private def getIndex(ref: AttributeReference) = ref.exprId.id.toInt
+  private def getIndex(attrib: Attribute) = attrib.exprId.id.toInt
 
   private def transformAttributesInExpression(expression: Expression): Expression = {
     expression match {
@@ -85,6 +85,11 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
         val newCondition: Expression = transformAttributesInExpression(condition)
         val newChild: CaerusPlan = transformAttributesInPlan(child)
         Filter(newCondition, newChild)
+      case Project(projectList, child) =>
+        val newProjectList: Seq[NamedExpression] =
+          projectList.map(transformAttributesInExpression(_).asInstanceOf[NamedExpression])
+        val newChild: CaerusPlan = transformAttributesInPlan(child)
+        Project(newProjectList, newChild)
       case RepartitionByExpression(partitionExpressions, child, numPartitions) =>
         val newPartitionExpressions: Seq[Expression] = partitionExpressions.map(transformAttributesInExpression)
         val newChild: CaerusPlan = transformAttributesInPlan(child)
@@ -154,8 +159,9 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
   }
 
   private def transformExpressionBack(expr: Expression, output: Seq[Attribute]): Expression = {
+    logger.debug("Expression: %s --- Output: %s --- Class: %s".format(expr, output, expr.getClass.getName))
     expr match {
-      case ref: AttributeReference => output(getIndex(ref))
+      case caerusAttrib: CaerusAttribute => output(getIndex(caerusAttrib))
       case _ => expr.withNewChildren(expr.children.map(transformExpressionBack(_, output)))
     }
   }
@@ -187,7 +193,6 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
           tempPlan.catalogTable,
           tempPlan.isStreaming)
       case caerusCacheLoad: CaerusCacheLoad =>
-        skip = true
         logger.info("Cache Load: %s".format(caerusCacheLoad.sources.mkString("[", ",", "]")))
         applyOptimization = false
         val tempPlan: LogicalRelation = spark.read
@@ -205,7 +210,6 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
       case caerusUnion: CaerusUnion =>
         new Union(caerusUnion.children.map(child => transformBack(child, inputPlan, inputCaerusPlan)))
       case caerusLoadWithIndices: CaerusLoadWithIndices =>
-        skip = true
         applyOptimization = false
         assert(inputPlan.isInstanceOf[LogicalRelation])
         val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
@@ -682,6 +686,8 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
         logger.info("Initial Spark's Logical Plan:\n%s".format(inputPlan))
         val outputPlan: LogicalPlan = optimize(inputPlan)
         logger.info("Optimized Spark's Logical Plan:\n%s".format(outputPlan))
+        if (!inputPlan.fastEquals(outputPlan))
+          skip = true
         outputPlan
       } else if (!applyOptimization) {
         logger.info("Semantic Cache Optimization is deactivated for plan:\n.%s".format(inputPlan))

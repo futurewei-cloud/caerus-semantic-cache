@@ -53,9 +53,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
 
   private val timeout: Long = {
     if (conf.hasPath("timeout"))
-      conf.getLong("timeout")
+      conf.getLong("timeout") * 60000L
     else
-      60000
+      60000L
   }
 
   private var pathId: Long = 0L

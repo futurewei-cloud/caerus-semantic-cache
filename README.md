@@ -26,6 +26,17 @@ ${MAVEN_HOME}/bin/mvn clean package
 ```
 ${CAERUS_HOME}/manager/src/main/resources/{manager.conf,log4j.properties}.template
 ```
+For `manager.conf` all the baseline caches should be defined (only HDFS supported for now). For example, an HDFS cluster in the storage side running on `10.0.0.10` at port `9000` with `64GiB` available can be registered as a baseline cache as follows (using `/tmp/cache` as a folder to store cache contents):
+```
+caches {
+    storage-disk {
+        site = "hdfs://10.0.0.10:9000/tmp/cache"
+        size = 64G
+    }
+}
+```
+More than one baseline cache can be defined, but only one per tier (`compute-memory`,`compute-disk`,`storage-memory`,`storage-disk`). 
+
 8. Run Semantic Cache Manager by runnning:
 ```
 ${SCALA_HOME}/bin/scala -Dlog4j.configuration=<log4j.properties path> ${CAERUS_HOME}/manager/target/manager-0.0.0-jar-with-dependencies.jar <manager.conf path>

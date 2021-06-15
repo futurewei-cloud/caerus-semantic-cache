@@ -425,21 +425,43 @@ case class UnifiedOptimizer() extends Optimizer {
     Some((res, dataTransform.get._3))
   }
 
+  private def updateReferences(plan: CaerusPlan, addReference: String => Unit): Unit = {
+    plan match {
+      case cacheLoad: CaerusCacheLoad => cacheLoad.sources.foreach(addReference)
+      case _ => plan.children.foreach(child => updateReferences(child, addReference))
+    }
+  }
+
   private def lookupCaching(
-      plan: CaerusPlan,
-      contents: Map[Candidate,String],
-      addReference: String => Unit
+    plan: CaerusPlan,
+    contents: Map[Candidate,String],
+    addReference: String => Unit
   ): Seq[(CaerusPlan, Option[CaerusPlan])] = {
     // Search for plans that are equal first.
+    val res1: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap {
+      case candidate@Caching(cachedPlan) if cachedPlan == plan =>
+        val cacheLoad: CaerusCacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")
+        Some(cacheLoad, None)
+      case _ =>
+        None
+    }.toSeq
+    if (res1.nonEmpty) {
+      updateReferences(res1.head._1, addReference)
+      return res1
+    }
+
+    // Search for plans for which the plan can benefit from.
     val postOrderPlan = CaerusPlan.postOrder(plan)
     logger.info("Post-order plan:\n%s".format(postOrderPlan.mkString("\n")))
-    contents.keys.flatMap(candidate => candidate match {
+    val res2: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap(candidate => candidate match {
       case Caching(cachedPlan) =>
         val cacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")
-        addReference(contents(candidate))
         dataReduce(cachedPlan, postOrderPlan, cacheLoad)
       case _ => None
     }).toSeq
+    if (res2.nonEmpty)
+      updateReferences(res2.head._1, addReference)
+    res2
   }
 
   private def optimizeWithAttributes(
