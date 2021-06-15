@@ -193,7 +193,6 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
           tempPlan.catalogTable,
           tempPlan.isStreaming)
       case caerusCacheLoad: CaerusCacheLoad =>
-        skip = true
         logger.info("Cache Load: %s".format(caerusCacheLoad.sources.mkString("[", ",", "]")))
         applyOptimization = false
         val tempPlan: LogicalRelation = spark.read
@@ -211,7 +210,6 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
       case caerusUnion: CaerusUnion =>
         new Union(caerusUnion.children.map(child => transformBack(child, inputPlan, inputCaerusPlan)))
       case caerusLoadWithIndices: CaerusLoadWithIndices =>
-        skip = true
         applyOptimization = false
         assert(inputPlan.isInstanceOf[LogicalRelation])
         val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
@@ -688,6 +686,8 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
         logger.info("Initial Spark's Logical Plan:\n%s".format(inputPlan))
         val outputPlan: LogicalPlan = optimize(inputPlan)
         logger.info("Optimized Spark's Logical Plan:\n%s".format(outputPlan))
+        if (!inputPlan.fastEquals(outputPlan))
+          skip = true
         outputPlan
       } else if (!applyOptimization) {
         logger.info("Semantic Cache Optimization is deactivated for plan:\n.%s".format(inputPlan))
