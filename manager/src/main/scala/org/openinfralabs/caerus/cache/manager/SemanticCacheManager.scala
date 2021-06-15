@@ -5,6 +5,7 @@ import com.typesafe.scalalogging.LazyLogging
 import io.grpc.{Server, ServerBuilder}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
+import org.openinfralabs.caerus.cache.common.Mode.Mode
 import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common._
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
@@ -12,6 +13,7 @@ import org.openinfralabs.caerus.cache.grpc.service._
 
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
+import scala.io.Source
 
 /**
  * Semantic Cache service, which is shared and offers semantic-aware caching capabilities.
@@ -23,7 +25,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     "compute-memory" -> Tier.COMPUTE_MEMORY,
     "compute-disk" -> Tier.COMPUTE_DISK,
     "storage-memory" -> Tier.STORAGE_MEMORY,
-    "storage-disk" -> Tier.STORAGE_DISK)
+    "storage-disk" -> Tier.STORAGE_DISK
+  )
   private val tiers: mutable.HashMap[Tier, String] = mutable.HashMap.empty[Tier, String]
   private val capacity: mutable.HashMap[Tier, Long] = mutable.HashMap.empty[Tier, Long]
   for (tier <- tierNames.keys) {
@@ -34,13 +37,24 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val site: String = conf.getString(siteConfStr)
       val size: Long = conf.getMemorySize(sizeConfStr).toBytes
       if (size <= 0) {
-        logger.warn("Size for tier %s is lower or equal to 0\n".format(tier))
+        logger.warn("Size for tier %s is lower or equal to 0".format(tier))
       } else {
           tiers(tierNames(tier)) = site
           capacity(tierNames(tier)) = size
       }
     } else {
-        logger.warn("Not all parameters are set for tier %s.\n".format(tier))
+        logger.warn("Not all parameters are set for tier %s.".format(tier))
+    }
+  }
+
+  private val operationMode: Mode = {
+    if (conf.hasPath("operationMode")) {
+      val operationMode: Int = conf.getInt("operationMode")
+      logger.info("Operation mode set to %s".format(operationMode))
+      Mode(operationMode)
+    } else {
+      logger.warn("Operation mode not set. Using default mode 3.")
+      Mode(3)
     }
   }
 
@@ -61,10 +75,19 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private var pathId: Long = 0L
   private val names: mutable.HashMap[String, Candidate] = mutable.HashMap.empty[String, Candidate]
   private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
-  private val reservations: mutable.HashMap[(String,Candidate),(String,Long)] =
-    mutable.HashMap.empty[(String,Candidate),(String,Long)]
+  private val reservations: mutable.HashMap[(String,Candidate),String] =
+    mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
   private val optimizer: Optimizer = UnifiedOptimizer()
+  private val predictorConfStr: String = "predictor"
+  private val predictor: Predictor = conf.getString(predictorConfStr + ".type") match {
+    case "oracle" =>
+      val filename: String = conf.getString(predictorConfStr + ".file")
+      val source = Source.fromFile(filename)
+      val futurePlans: Seq[CaerusPlan] = source.getLines().map(CaerusPlan.fromJSON).toSeq
+      OraclePredictor(futurePlans)
+  }
+  private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor)
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
@@ -73,7 +96,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private def start(): Unit = {
     val service = SemanticCacheServiceGrpc.bindService(new SemanticCacheService, execCtx)
     server = Some(ServerBuilder.forPort(port).addService(service).build.start)
-    logger.info("Server started on port %s\n".format(port))
+    logger.info("Server started with mode %d on port %s\n".format(operationMode.id, port))
     sys.addShutdownHook {
       logger.warn("Shutting down gRPC server...\n")
       stop()
@@ -158,7 +181,13 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
+      if (operationMode != Mode.MANUAL_WRITE) {
+        val message: String = "Reserve API is not allowed for mode %s".format(operationMode)
+        logger.warn(message)
+        return Future.failed(new RuntimeException(message))
+      }
       val candidate: Candidate = Candidate.fromJSON(request.candidate)
+      val reservedSize: Long = candidate.sizeInfo.get.writeSize
       val tier: Tier = Tier(request.tier)
       val path = try {
         getPath(candidate, tier)
@@ -177,17 +206,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
-      if (capacity(tier) < request.estimatedSize) {
+      if (capacity(tier) < candidate.sizeInfo.get.writeSize) {
         val message: String = "Insufficient capacity for tier %s.\tAsked to reserve: %s\tAvailable: %s"
-            .format(tier, request.estimatedSize, capacity(tier))
+            .format(tier, candidate.sizeInfo.get.writeSize, capacity(tier))
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
       names(request.name) = candidate
-      reservations((request.clientId,candidate)) = (path,request.estimatedSize)
-      capacity(tier) -= request.estimatedSize
+      reservations((request.clientId,candidate)) = path
+      capacity(tier) -= reservedSize
       logger.info("Reserve for candidate:\n%s\nReserved size: %s\tUpdated capacity of tier %s: %s."
-          .format(candidate.toString, request.estimatedSize, tier, capacity(tier)))
+          .format(candidate.toString, reservedSize, tier, capacity(tier)))
       Future.successful(PathReply(path))
     }
 
@@ -201,6 +230,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
+      if (operationMode != Mode.MANUAL_WRITE) {
+        val message: String = "Commit Reservation API is not allowed for mode %s".format(operationMode.id)
+        logger.warn(message)
+        return Future.failed(new RuntimeException(message))
+      }
       if (!names.contains(request.name)) {
         val message = "Candidate with name %s cannot be found.".format(request.name)
         logger.warn(message)
@@ -217,9 +251,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
-      val reservationStatus: (String,Long) = reservations((request.clientId,candidate))
-      val path: String = reservationStatus._1
-      val reservedSize: Long = reservationStatus._2
+      val path: String = reservations((request.clientId,candidate))
+      val reservedSize: Long = candidate.sizeInfo.get.writeSize
       val tier: Tier = getTierFromPath(path)
       if (request.commit) {
         logger.info("Submit candidate:\n %s\nReserved size: %s\tReal size: %s\tCorrected Capacity: %s.".format(
@@ -230,12 +263,13 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         ))
         contents.put(candidate,path)
         reverseReferences(path) = Set.empty[String]
+        candidate.sizeInfo.get.writeSize = request.realSize
         logger.info("Updated Contents: %s\n".format(contents))
       } else {
         logger.info("Cancel candidate:\n%s\nReserved size: %s\tCorrected Capacity: %s.".format(
           candidate.toString,
           reservedSize,
-          capacity(tier) + reservedSize - request.realSize
+          capacity(tier) + reservedSize
         ))
         names.remove(request.name)
       }
@@ -254,6 +288,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
+      if (operationMode != Mode.MANUAL_WRITE) {
+        val message: String = "Delete API is not allowed for mode %s".format(operationMode.id)
+        logger.warn(message)
+        return Future.failed(new RuntimeException(message))
+      }
       val name: String = request.name
       if (!names.contains(name)) {
         val message = "Candidate with name %s cannot be found.".format(name)
@@ -297,6 +336,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
+      if (operationMode != Mode.MANUAL_WRITE) {
+        val message: String = "Free API is not allowed for mode %s".format(operationMode.id)
+        logger.warn(message)
+        return Future.failed(new RuntimeException(message))
+      }
       if (!markedForDeletion.contains(request.path)) {
         val message: String = "Release for path %s is ignored since it is not marked for deletion.".format(request.path)
         logger.warn(message)
@@ -305,7 +349,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val tier: Tier = getTierFromPath(request.path)
       capacity(tier) -= request.realSize
       logger.info("Free:%s\tReleased size: %s\tCorrected Capacity: %s."
-          .format(request.path, request.realSize, capacity(tier)))
+        .format(request.path, request.realSize, capacity(tier)))
       Future.successful(Ack())
     }
 
@@ -318,9 +362,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
+      logger.info("Register client %s with timeout %s and mode %d".format(request.clientId, timeout, operationMode.id))
       registeredClients(request.clientId) = System.currentTimeMillis()
       references(request.clientId) = Set.empty[String]
-      Future.successful(RegisterReply(timeout))
+      Future.successful(RegisterReply(operationMode.id, timeout))
     }
 
     /**
@@ -349,11 +394,25 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val caerusPlan: CaerusPlan = CaerusPlan.fromJSON(request.caerusPlan)
       val availableContents: mutable.Map[Candidate,String] =
         contents.filter(element => !markedForDeletion.contains(element._2))
-      val optimizedPlan = optimizer.optimize(
-          caerusPlan,
-          availableContents.toMap[Candidate,String],
-          path => addReference(request.clientId, path)
-      )
+      val optimizedPlan = {
+        if (operationMode == Mode.MANUAL_WRITE) {
+          optimizer.optimize(
+            caerusPlan,
+            availableContents.toMap[Candidate,String],
+            path => addReference(request.clientId, path)
+          )
+        } else if (operationMode == Mode.FULLY_AUTOMATIC) {
+          planner.optimize(
+            caerusPlan,
+            availableContents.toMap[Candidate,String],
+            request.candidates.map(Candidate.fromJSON)
+          )
+        } else {
+          val message = "Mode %s is not supported yet.".format(operationMode.id)
+          logger.warn(message)
+          caerusPlan
+        }
+      }
       logger.info("References: %s".format(references))
       logger.info("Reverse References: %s".format(reverseReferences))
       Future.successful(OptimizationReply(optimizedCaerusPlan = optimizedPlan.toJSON))
@@ -369,6 +428,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
+      if (operationMode != Mode.MANUAL_WRITE) {
+        val message: String = "Get Status API is not allowed for mode %s".format(operationMode)
+        logger.warn(message)
+        return Future.failed(new RuntimeException(message))
+      }
       Future.successful(getCacheStatus)
     }
   }

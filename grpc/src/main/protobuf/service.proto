@@ -27,7 +27,6 @@ service SemanticCacheService {
 message ReservationRequest {
   string clientId = 1;
   string candidate = 2;
-  int64 estimatedSize = 3;
   int32 tier = 4;
   string name = 5;
 }
@@ -59,7 +58,8 @@ message RegisterRequest {
 }
 
 message RegisterReply {
-  int64 terminationTimeout = 1;
+  int32 mode = 1;
+  int64 terminationTimeout = 2;
 }
 
 message HeartbeatRequest {
@@ -71,6 +71,7 @@ message Ack {}
 message OptimizationRequest {
   string clientId = 1;
   string caerusPlan = 2;
+  repeated string candidates = 3;
 }
 
 message OptimizationReply {

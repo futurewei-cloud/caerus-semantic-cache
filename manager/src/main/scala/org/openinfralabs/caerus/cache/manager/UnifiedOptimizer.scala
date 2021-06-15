@@ -168,7 +168,7 @@ case class UnifiedOptimizer() extends Optimizer {
       .format(indices.mkString(","), source))
     val equalSourcePaths: Seq[(String,Seq[SourceInfo])] = contents.keys.flatMap(candidate => {
       candidate match {
-        case Repartitioning(repartitionedSource, partitionIndex)
+        case Repartitioning(repartitionedSource, partitionIndex, _)
           if indices.contains(partitionIndex) && repartitionedSource == source =>
             Some((contents(candidate), Seq.empty[SourceInfo]))
         case _ => None
@@ -180,9 +180,9 @@ case class UnifiedOptimizer() extends Optimizer {
     // Search for plans that partially fill the output.
     logger.info("Lookup for repartitions for indices %s with a subset of records as:\n%s"
       .format(indices.mkString(","), source))
-    val subPlanPaths: Seq[(String,Seq[SourceInfo])] = contents.keys.flatMap(candidate => {
+    contents.keys.flatMap(candidate => {
       candidate match {
-        case Repartitioning(repartitionedSource, partitionIndex) if indices.contains(partitionIndex) =>
+        case Repartitioning(repartitionedSource, partitionIndex, _) if indices.contains(partitionIndex) =>
           val diff: Option[Seq[SourceInfo]] = repartitionedSource.subsetOf(source)
           if (diff.isDefined)
             Some((contents(candidate), diff.get))
@@ -191,13 +191,13 @@ case class UnifiedOptimizer() extends Optimizer {
         case _ => None
       }
     }).toSeq
-    subPlanPaths
   }
 
   private def prepareMinMaxCondition(
     condition: Expression,
     minAttribute: Attribute,
-    maxAttribute: Attribute): Expression = {
+    maxAttribute: Attribute
+  ): Expression = {
     condition match {
       case EqualTo(_, lit: Literal) =>
         And(LessThanOrEqual(minAttribute, lit), GreaterThanOrEqual(maxAttribute,lit))
@@ -255,7 +255,8 @@ case class UnifiedOptimizer() extends Optimizer {
       .format(indices.mkString(","), source))
     contents.keys.flatMap(candidate => {
       candidate match {
-        case FileSkippingIndexing(indexedSource, index) if indices.contains(index) && indexedSource.canEqual(source) =>
+        case FileSkippingIndexing(indexedSource, index, _)
+          if indices.contains(index) && indexedSource.canEqual(source) =>
           val intersection: Option[Seq[SourceInfo]] = source.intersection(indexedSource)
           if (intersection.isDefined)
             Some(contents(candidate), index, intersection.get)
@@ -264,20 +265,6 @@ case class UnifiedOptimizer() extends Optimizer {
         case _ => None
       }
     }).toSeq
-  }
-
-  private def isSubsetOf(sources1: Seq[SourceInfo], sources2: Seq[SourceInfo]): Option[Seq[SourceInfo]] = {
-    var index: Int = 0
-    var res: Seq[SourceInfo] = Seq.empty[SourceInfo]
-    for (sourceInfo1 <- sources1) {
-      val newIndex: Int = sources2.indexOf(sourceInfo1, index)
-      if (newIndex == -1)
-        return None
-      res ++= sources2.slice(index, newIndex)
-      index = newIndex+1
-    }
-    res ++= sources2.slice(index, sources2.length)
-    Some(res)
   }
 
   private def orConditionEquals(set1: Set[Expression], set2: Set[Expression]): Boolean = {
@@ -319,10 +306,14 @@ case class UnifiedOptimizer() extends Optimizer {
     var dataTransform: DataTransform = (cachedPlan, plan.head) match {
       case (CaerusSourceLoad(_, cachedSources, cachedFormat), CaerusSourceLoad(output, sources, format))
         if format == cachedFormat =>
-        val newSources: Option[Seq[SourceInfo]] = isSubsetOf(cachedSources, sources)
+        val newSources: Option[Set[SourceInfo]] =
+          SourceInfo.subsetOf(cachedSources.toSet[SourceInfo], sources.toSet[SourceInfo])
         if (newSources.isDefined) {
           val unionLoad: Option[CaerusPlan] =
-            if (newSources.get.nonEmpty) Some(CaerusSourceLoad(output, newSources.get, format)) else None
+            if (newSources.get.nonEmpty)
+              Some(CaerusSourceLoad(output, newSources.get.toSeq, format))
+            else
+              None
           plan = plan.tail
           Some(Set.empty[Set[Expression]], output.map(attrib => indexOfAttribute(attrib)), unionLoad, plan)
         } else {
@@ -433,13 +424,13 @@ case class UnifiedOptimizer() extends Optimizer {
   }
 
   private def lookupCaching(
-    plan: CaerusPlan,
-    contents: Map[Candidate,String],
-    addReference: String => Unit
+      plan: CaerusPlan,
+      contents: Map[Candidate,String],
+      addReference: String => Unit
   ): Seq[(CaerusPlan, Option[CaerusPlan])] = {
     // Search for plans that are equal first.
     val res1: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap {
-      case candidate@Caching(cachedPlan) if cachedPlan == plan =>
+      case candidate@Caching(cachedPlan, _) if cachedPlan == plan =>
         val cacheLoad: CaerusCacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")
         Some(cacheLoad, None)
       case _ =>
@@ -454,7 +445,7 @@ case class UnifiedOptimizer() extends Optimizer {
     val postOrderPlan = CaerusPlan.postOrder(plan)
     logger.info("Post-order plan:\n%s".format(postOrderPlan.mkString("\n")))
     val res2: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap(candidate => candidate match {
-      case Caching(cachedPlan) =>
+      case Caching(cachedPlan, _) =>
         val cacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")
         dataReduce(cachedPlan, postOrderPlan, cacheLoad)
       case _ => None
@@ -556,7 +547,7 @@ case class UnifiedOptimizer() extends Optimizer {
         logger.info("Look for file-skipping indices for source node:\n%s".format(caerusSourceLoad))
         logger.info("Potential file-skipping indices: %s\n".format(filterStatus.keys.mkString(",")))
         val fileSkippingIndexingCandidates: Seq[(String, Int, Seq[SourceInfo])] =
-          lookupFileSkippingIndexing(caerusSourceLoad, filterStatus.keys.toSet, contents)
+          lookupFileSkippingIndexing(caerusSourceLoad, filterStatus.keys.toSet[Int], contents)
         logger.info("Found file-skipping indices: %s\n".format(fileSkippingIndexingCandidates.map(_._1).mkString(",")))
         if (fileSkippingIndexingCandidates.nonEmpty) {
           val path: String = fileSkippingIndexingCandidates.head._1

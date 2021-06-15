@@ -1,7 +1,6 @@
 package org.openinfralabs.caerus.cache.common
 
-import org.apache.spark.sql.catalyst.expressions.{ExprId, Expression, Unevaluable}
-import org.apache.spark.sql.types.{DataType, Metadata}
+import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, Statistics}
 
 package object plans {
   import org.apache.spark.sql.catalyst.expressions.Attribute
@@ -20,14 +19,20 @@ package object plans {
     }
   }
 
-  abstract class CaerusLoad(override val output: Seq[Attribute]) extends CaerusPlan {
-    override final def children: Seq[CaerusPlan] = Seq.empty[CaerusPlan]
-  }
+  abstract class CaerusLoad(override val output: Seq[Attribute]) extends LeafNode
 
   case class CaerusEmpty() extends CaerusLoad(Seq.empty[Attribute])
 
-  case class CaerusSourceLoad(override val output: Seq[Attribute], sources: Seq[SourceInfo], format: String)
-      extends CaerusLoad(output) {
+  case class CaerusSourceLoad(
+    override val output: Seq[Attribute],
+    sources: Seq[SourceInfo],
+    format: String
+  ) extends CaerusLoad(output) {
+
+    def size: Long = sources.map(_.length).sum
+
+    override def computeStats(): Statistics = Statistics(size)
+
     override def canEqual(other: Any): Boolean = {
       other.isInstanceOf[CaerusSourceLoad] && other.asInstanceOf[CaerusSourceLoad].format == format
     }
@@ -50,17 +55,9 @@ package object plans {
     def intersection(other: CaerusSourceLoad): Option[Seq[SourceInfo]] = {
       if (!canEqual(other))
         return None
-      var res1: Boolean = false
-      var res2: Seq[SourceInfo] = Seq.empty[SourceInfo]
-      for (source <- sources) {
-        if (other.sources.contains(source)) {
-          res1 = true
-        } else {
-          res2 :+= source
-        }
-      }
-      if (res1)
-        Some(res2)
+      val rest: Seq[SourceInfo] = (sources.toSet[SourceInfo] -- other.sources.toSet[SourceInfo]).toSeq
+      if (rest.size < sources.size)
+        Some(rest)
       else
         None
     }
@@ -69,29 +66,29 @@ package object plans {
      * See if the set of source files of this CaerusSourceLoad is a subset of the corresponding set of the other
      * CaerusSourceLoad.
      * @param other : Other source to compare with.
-     * @return the source files that only other CaerusSourceLoad has, if this source is a subset of other. Otherwise,
-     *         None.
+     * @return the source files that only other CaerusSourceLoad has (other.sources - this.sources), if this source is a
+     *         subset of other. Otherwise, None.
      */
     def subsetOf(other: CaerusSourceLoad): Option[Seq[SourceInfo]] = {
-      Console.out.println("Find if %s is a subset of %s.\n".format(this, other))
-      if (!canEqual(other))
+      if (!canEqual(other)) {
         return None
-      var curIndex: Int = 0
-      var res: Seq[SourceInfo] = Seq.empty[SourceInfo]
-      for (source <- sources) {
-        val newIndex: Int = other.sources.indexOf(source, curIndex)
-        if (newIndex == -1)
-          return None
-        res ++= other.sources.slice(curIndex, newIndex)
-        curIndex = newIndex+1
       }
-      res ++= other.sources.slice(curIndex, other.sources.length)
-      Some(res)
+      val remainder: Option[Set[SourceInfo]] =
+        SourceInfo.subsetOf(this.sources.toSet[SourceInfo], other.sources.toSet[SourceInfo])
+      if (remainder.isDefined)
+        Some(remainder.get.toSeq)
+      else
+        None
     }
   }
 
   case class CaerusCacheLoad(override val output: Seq[Attribute], sources: Seq[String], format: String)
-      extends CaerusLoad(output) {
+    extends CaerusLoad(output) {
+    /**
+     * Union of two CaerusLoad plans.
+     * @param other The second plan to merge.
+     * @return new CaerusLoad plan which contains all records from this and other plan.
+     */
     def merge(other: CaerusPlan): CaerusPlan = {
       assert(other.output == output)
       other match {
@@ -122,43 +119,10 @@ package object plans {
   case class CaerusUnion(override val output: Seq[Attribute], override val children: Seq[CaerusPlan]) extends CaerusPlan
 
   case class CaerusLoadWithIndices(
-      override val output: Seq[Attribute],
-      @transient child: CaerusPlan,
-      path: Seq[String],
-      index: Int) extends CaerusLoad(output) {
+    override val output: Seq[Attribute],
+    @transient child: CaerusPlan,
+    path: Seq[String],
+    index: Int) extends CaerusLoad(output) {
     override val innerChildren: Seq[CaerusPlan] = Seq(child)
-  }
-
-  case class CaerusAttribute(index: Int, dataType: DataType) extends Attribute with Unevaluable {
-    override def withNullability(newNullability: Boolean): Attribute = this
-    override def withQualifier(newQualifier: Seq[String]): Attribute = this
-    override def withName(newName: String): Attribute = this
-    override def withMetadata(newMetadata: Metadata): Attribute = this
-    override def withExprId(newExprId: ExprId): Attribute = this
-    override def newInstance(): Attribute = CaerusAttribute(index, dataType)
-    override def name: String = "none"
-    override def exprId: ExprId = ExprId(index.toLong)
-    override def qualifier: Seq[String] = Seq.empty[String]
-    override def nullable: Boolean = true
-
-    def sameRef(other: CaerusAttribute): Boolean = index == other.index
-
-    override def equals(other: Any): Boolean = other match {
-      case otherCaerusAttribute: CaerusAttribute =>
-        index == otherCaerusAttribute.index && dataType == otherCaerusAttribute.dataType
-      case _ => false
-    }
-
-    override def semanticEquals(other: Expression): Boolean = other match {
-      case otherCaerusAttribute: CaerusAttribute => sameRef(otherCaerusAttribute)
-      case _ => false
-    }
-
-    override def toString: String = "%s#%s: %s".format(name, index, dataType)
-
-    override def simpleString(maxFields: Int): String =
-        "%s#%s: %s".format(name, index, dataType.simpleString(maxFields))
-
-    override def sql: String = "%s#%s".format(name, index)
   }
 }

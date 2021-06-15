@@ -4,6 +4,7 @@ import io.grpc.{Channel, ManagedChannelBuilder}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
 import org.apache.spark.scheduler.{SparkListener, SparkListenerApplicationEnd}
+import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -11,39 +12,59 @@ import org.apache.spark.sql.execution.datasources._
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types._
-import org.apache.spark.sql._
+import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SizeEstimator}
+import org.openinfralabs.caerus.cache.common.Mode.Mode
 import org.openinfralabs.caerus.cache.common.Tier.Tier
-import org.openinfralabs.caerus.cache.common.plans._
 import org.openinfralabs.caerus.cache.common._
+import org.openinfralabs.caerus.cache.common.plans.{SourceInfo, _}
 import org.openinfralabs.caerus.cache.grpc.service._
 import org.slf4j.{Logger, LoggerFactory}
+
+import java.io.{BufferedWriter, File, FileWriter}
 
 /**
  * Client module used with Scala Spark Client that allows interaction with a Semantic Cache service.
  *
  * @since 0.0.0
  */
-class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkListener {
+class SemanticCache(
+  spark: SparkSession,
+  serverAddress: String,
+  printFile: Option[String] = None
+) extends SparkListener {
   private final val logger: Logger = LoggerFactory.getLogger(this.getClass)
   private val ipPair: (String, Int) = getIPFromString(serverAddress)
   private val channel: Channel = ManagedChannelBuilder.forAddress(ipPair._1, ipPair._2).usePlaintext().build()
   private val clientId: String = spark.sparkContext.applicationId
   private var applyOptimization: Boolean = true
   private var skip: Boolean = false
+  private val sizeEstimator: SizeEstimator = BasicSizeEstimator()
+  private val candidateSelector: CandidateSelector = BasicCandidateSelector()
+  private val previousPlan: LogicalPlan = null
 
   // Activate optimization for spark session.
   logger.info("Activate Semantic Cache optimization.")
-  private val timeout: Long = try {
+  private val registerReply: RegisterReply = try {
     val registerRequest: RegisterRequest = RegisterRequest(clientId)
     val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-    val registerReply: RegisterReply = stub.register(registerRequest)
-    registerReply.terminationTimeout
+    stub.register(registerRequest)
   } catch {
     case e: Exception =>
       logger.warn("Failed to register Semantic Cache Client with the following message: %s".format(e.getMessage))
       throw new RuntimeException("Semantic Cache Client was unable to register to Semantic Cache Manager.")
   }
-  private val heartbeatSender: HeartbeatSender = new HeartbeatSender(clientId, timeout/3, channel)
+  private val mode: Mode = {
+    if (printFile.isDefined) {
+      logger.info("Print only mode activated.")
+      Mode(1)
+    } else {
+      logger.info("Mode %s activated.".format(registerReply.mode))
+      Mode(registerReply.mode)
+    }
+  }
+  private val timeout: Long = registerReply.terminationTimeout/3
+  logger.info("Start heartbeats every %s ms".format(timeout))
+  private val heartbeatSender: HeartbeatSender = new HeartbeatSender(clientId, timeout, channel)
   private val heartbeatThread: Thread = new Thread(heartbeatSender)
   heartbeatThread.start()
   spark.sparkContext.addSparkListener(listener=this)
@@ -64,67 +85,7 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
     (host, port)
   }
 
-  private def getIndex(attrib: Attribute) = attrib.exprId.id.toInt
-
-  private def transformAttributesInExpression(expression: Expression): Expression = {
-    expression match {
-      case ref: AttributeReference => CaerusAttribute(getIndex(ref), ref.dataType)
-      case _ => expression.withNewChildren(expression.children.map(transformAttributesInExpression))
-    }
-  }
-
-  private def transformAttributesInPlan(plan: CaerusPlan): CaerusPlan = {
-    plan match {
-      case Aggregate(groupingExpressions, aggregateExpressions, child) =>
-        val newGroupingExpressions: Seq[Expression] = groupingExpressions.map(transformAttributesInExpression)
-        val newAggregateExpressions: Seq[NamedExpression] =
-          aggregateExpressions.map(transformAttributesInExpression).asInstanceOf[Seq[NamedExpression]]
-        val newChild: CaerusPlan = transformAttributesInPlan(child)
-        Aggregate(newGroupingExpressions, newAggregateExpressions, newChild)
-      case Filter(condition, child) =>
-        val newCondition: Expression = transformAttributesInExpression(condition)
-        val newChild: CaerusPlan = transformAttributesInPlan(child)
-        Filter(newCondition, newChild)
-      case Project(projectList, child) =>
-        val newProjectList: Seq[NamedExpression] =
-          projectList.map(transformAttributesInExpression(_).asInstanceOf[NamedExpression])
-        val newChild: CaerusPlan = transformAttributesInPlan(child)
-        Project(newProjectList, newChild)
-      case RepartitionByExpression(partitionExpressions, child, numPartitions) =>
-        val newPartitionExpressions: Seq[Expression] = partitionExpressions.map(transformAttributesInExpression)
-        val newChild: CaerusPlan = transformAttributesInPlan(child)
-        RepartitionByExpression(newPartitionExpressions, newChild, numPartitions)
-      case CaerusSourceLoad(output, sources, format) =>
-        val newOutput: Seq[Attribute] = output.map(transformAttributesInExpression).asInstanceOf[Seq[Attribute]]
-        CaerusSourceLoad(newOutput, sources, format)
-      case _ => plan.withNewChildren(plan.children.map(transformAttributesInPlan))
-    }
-  }
-
-  private def transformCanonicalized(plan: LogicalPlan): CaerusPlan = {
-    val caerusPlan = plan match {
-      case LogicalRelation(hadoopFsRelation: HadoopFsRelation, output, _, _) =>
-        if (!hadoopFsRelation.fileFormat.isInstanceOf[DataSourceRegister]) {
-          logger.warn("Format provided for Data-Skipping Indices is not supported. Format: %s\n"
-            .format(hadoopFsRelation.fileFormat))
-          return plan
-        }
-        val inputFiles: Seq[FileStatus] = hadoopFsRelation.location.asInstanceOf[PartitioningAwareFileIndex].allFiles()
-        val inputs: Seq[SourceInfo] =
-          inputFiles.map(f => SourceInfo(f.getPath.toString, f.getModificationTime, 0, f.getLen))
-        val format: String = hadoopFsRelation.fileFormat.asInstanceOf[DataSourceRegister].shortName()
-        CaerusSourceLoad(output, inputs, format)
-      case _ =>
-        plan.withNewChildren(plan.children.map(transformCanonicalized))
-    }
-    transformAttributesInPlan(caerusPlan)
-  }
-
-  private def transform(plan: LogicalPlan): CaerusPlan = {
-    val canonicalizedPlan: CaerusPlan = plan.canonicalized
-    logger.debug("Canonicalized Spark Plan:\n%s".format(canonicalizedPlan))
-    transformCanonicalized(canonicalizedPlan)
-  }
+  private def transform(plan: LogicalPlan): CaerusPlan = SemanticCache.transform(plan)
 
   private def pullUpUnion(plan: LogicalPlan): LogicalPlan = {
     val optimizedPlan: LogicalPlan = plan.withNewChildren(plan.children.map(pullUpUnion))
@@ -161,7 +122,7 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
   private def transformExpressionBack(expr: Expression, output: Seq[Attribute]): Expression = {
     logger.debug("Expression: %s --- Output: %s --- Class: %s".format(expr, output, expr.getClass.getName))
     expr match {
-      case caerusAttrib: CaerusAttribute => output(getIndex(caerusAttrib))
+      case caerusAttrib: CaerusAttribute => output(SemanticCache.getIndex(caerusAttrib))
       case _ => expr.withNewChildren(expr.children.map(transformExpressionBack(_, output)))
     }
   }
@@ -195,18 +156,20 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
       case caerusCacheLoad: CaerusCacheLoad =>
         logger.info("Cache Load: %s".format(caerusCacheLoad.sources.mkString("[", ",", "]")))
         applyOptimization = false
-        val tempPlan: LogicalRelation = spark.read
-          .format(caerusCacheLoad.format)
-          .load(caerusCacheLoad.sources:_*)
-          .queryExecution
-          .analyzed
-          .asInstanceOf[LogicalRelation]
+        val tempPlan: LogicalRelation =
+          spark.read
+            .format(caerusCacheLoad.format)
+            .load(caerusCacheLoad.sources:_*)
+            .queryExecution
+            .analyzed
+            .asInstanceOf[LogicalRelation]
         applyOptimization = true
         new LogicalRelation(
           tempPlan.relation,
           inputPlan.output.asInstanceOf[Seq[AttributeReference]],
           tempPlan.catalogTable,
-          tempPlan.isStreaming)
+          tempPlan.isStreaming
+        )
       case caerusUnion: CaerusUnion =>
         new Union(caerusUnion.children.map(child => transformBack(child, inputPlan, inputCaerusPlan)))
       case caerusLoadWithIndices: CaerusLoadWithIndices =>
@@ -226,19 +189,20 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
         val index: Int = caerusLoadWithIndices.index
         val filterSql: String = replaceNames(filter.condition, index).sql
         logger.info("Filter sql: %s".format(filterSql))
-        val filteredPath: Set[String] = spark.read
-          .format(cacheLoad.format)
-          .schema(getSchemaForLoadWithIndices(caerusLoadWithIndices.output(index).dataType, index))
-          .load(cacheLoad.sources:_*)
-          .filter(filterSql)
-          .select(col="path")
-          .collect()
-          .map(row => row(0))
-          .toSet
-          .asInstanceOf[Set[String]]
+        val filteredPath: Seq[String] =
+          spark.read
+            .format(cacheLoad.format)
+            .schema(getSchemaForLoadWithIndices(caerusLoadWithIndices.output(index).dataType, index))
+            .load(cacheLoad.sources:_*)
+            .filter(filterSql)
+            .select("path")
+            .collect()
+            .map(row => row(0))
+            .toSeq
+            .asInstanceOf[Seq[String]]
         logger.info("Filtered path: %s".format(filteredPath.mkString("[", ",", "]")))
         applyOptimization = true
-        val newPath: Set[String] = caerusLoadWithIndices.path.toSet.intersect(filteredPath)
+        val newPath: Seq[String] = caerusLoadWithIndices.path.intersect(filteredPath)
         logger.info("New path: %s".format(newPath.mkString("[", ",", "]")))
         val newSourceLoad: CaerusSourceLoad = CaerusSourceLoad(
           sourceLoad.output,
@@ -256,11 +220,10 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
           projectList.map(transformExpressionBack(_, newChild.output).asInstanceOf[NamedExpression])
         Project(newProjectList, newChild)
       case Filter(condition, child) =>
-        val newChild: LogicalPlan =
-          inputPlan match {
+        val newChild: LogicalPlan = inputPlan match {
             case filter: Filter => transformBack(child, filter.child, inputCaerusPlan.asInstanceOf[Filter].child)
             case _ => transformBack(child, inputPlan, inputCaerusPlan)
-          }
+        }
         val newCondition: Expression = transformExpressionBack(condition, newChild.output)
         Filter(newCondition, newChild)
       case _ =>
@@ -316,11 +279,27 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
       val inputCaerusPlan: CaerusPlan = transform(inputPlan)
       logger.info("Initial Caerus Plan:\n%s".format(inputCaerusPlan))
       val inputSerializedCaerusPlan: String = inputCaerusPlan.toJSON
+      if (printFile.isDefined) {
+        logger.info("Printing Serialized Plan to file and returning without changes.")
+        val bw = new BufferedWriter(new FileWriter(new File(printFile.get), true))
+        bw.write(inputSerializedCaerusPlan + "\n")
+        bw.close()
+        return inputPlan
+      }
       logger.info("Initial Serialized Caerus Plan: %s\n".format(inputSerializedCaerusPlan))
+      val candidates: Seq[Candidate] = {
+        if (mode == Mode.FULLY_AUTOMATIC)
+          candidateSelector.getCandidates(inputCaerusPlan)
+        else
+          Seq.empty[Candidate]
+      }
+      candidates.foreach(sizeEstimator.estimateSize)
+      val jsonCandidates: Seq[String] = candidates.map(_.toJSON)
+      logger.info("JSON Candidates:\n%s".format(jsonCandidates.mkString("\n")))
 
       // Make optimization request to Semantic Cache Manager.
       val outputSerializedCaerusPlan: String = try {
-        val optRequest: OptimizationRequest = OptimizationRequest(clientId, inputSerializedCaerusPlan)
+        val optRequest: OptimizationRequest = OptimizationRequest(clientId, inputSerializedCaerusPlan, jsonCandidates)
         val optStub = SemanticCacheServiceGrpc.blockingStub(channel)
         val optReply: OptimizationReply = optStub.optimize(optRequest)
         optReply.optimizedCaerusPlan
@@ -368,6 +347,12 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
    * @since 0.0.0
    */
   def repartitioning(loadDF: DataFrame, partitionAttribute: String, tier: Tier, name: String): Long = {
+    // See if mode allows this operation.
+    if (mode != Mode.MANUAL_WRITE) {
+      logger.warn("Repartitioning not allowed for mode %s. Ignoring request.".format(mode))
+      return 0L
+    }
+
     // Make runtime checks, to ensure support.
     val logicalPlan: LogicalPlan = loadDF.queryExecution.logical
     if (!logicalPlan.isInstanceOf[LogicalRelation]) {
@@ -393,14 +378,14 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
     val caerusSourceLoad: CaerusSourceLoad = caerusPlan.asInstanceOf[CaerusSourceLoad]
 
     // Find related information (metadata) about load.
-    val estimatedSize: Long = logicalPlan.stats.sizeInBytes.toLong
     val numPartitions: Int = loadDF.rdd.getNumPartitions
 
     // Make reservation request.
     val candidate: Repartitioning = Repartitioning(caerusSourceLoad, index)
+    sizeEstimator.estimateSize(candidate)
     val path: String = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, estimatedSize, tier.id, name)
+      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, tier.id, name)
       stub.reserve(request).path
     } catch {
       case e: Exception =>
@@ -457,6 +442,12 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
    * @since 0.0.0
    */
   def fileSkippingIndexing(loadDF: DataFrame, indexedAttribute: String, tier: Tier, name: String): Long = {
+    // See if mode allows this operation.
+    if (mode != Mode.MANUAL_WRITE) {
+      logger.warn("Creating files-skipping indices not allowed for mode %s. Ignoring request.".format(mode))
+      return 0L
+    }
+
     // Transform load DataFrame to CaerusLoad.
     val logicalPlan: LogicalPlan = loadDF.queryExecution.logical
     if (!logicalPlan.isInstanceOf[LogicalRelation]) {
@@ -487,14 +478,12 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
       logger.warn("Format %s is not supported.".format(caerusSourceLoad))
     }
 
-    // Estimate size of indices.
-    val estimatedSize: Long = caerusSourceLoad.sources.length * 128L + 512L
-
     // Make reservation request.
     val candidate: FileSkippingIndexing = FileSkippingIndexing(caerusSourceLoad, index)
+    sizeEstimator.estimateSize(candidate)
     val path: String = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, estimatedSize, tier.id, name)
+      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, tier.id, name)
       stub.reserve(request).path
     } catch {
       case e: Exception =>
@@ -571,6 +560,12 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
    * @since 0.0.0
    */
   def cacheIntermediateData(intermediateDF: DataFrame, tier: Tier, name: String): Long = {
+    // See if mode allows this operation.
+    if (mode != Mode.MANUAL_WRITE) {
+      logger.warn("Caching intermediate data not allowed for mode %s. Ignoring request.".format(mode))
+      return 0L
+    }
+
     // Transform load DataFrame to CaerusPlan.
     applyOptimization = false
     val logicalPlan: LogicalPlan = intermediateDF.queryExecution.optimizedPlan
@@ -580,12 +575,12 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
       return 0L
     }
     val caerusPlan = transform(logicalPlan)
-    val estimatedSize: Long = logicalPlan.stats.sizeInBytes.toLong
     val candidate: Caching = Caching(caerusPlan)
+    sizeEstimator.estimateSize(candidate)
     logger.debug("JSON Candidate:\n%s".format(candidate.toJSON))
     val path: String = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, estimatedSize, tier.id, name)
+      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, tier.id, name)
       stub.reserve(request).path
     } catch {
       case e: Exception =>
@@ -637,6 +632,12 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
    * @since 0.0.0
    */
   def delete(name: String): Long = {
+    // See if mode allows this operation.
+    if (mode != Mode.MANUAL_WRITE) {
+      logger.warn("Delete not allowed for mode %s. Ignoring request.".format(mode))
+      return 0L
+    }
+
     // Send delete request and get path to delete.
     val path: String = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
@@ -682,7 +683,9 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
    */
   object Optimization extends Rule[LogicalPlan] {
     def apply(inputPlan: LogicalPlan): LogicalPlan = {
-      if (applyOptimization && !skip) {
+      if (mode == Mode.NO_CACHE) {
+        inputPlan
+      } else if (applyOptimization && !skip) {
         logger.info("Initial Spark's Logical Plan:\n%s".format(inputPlan))
         val outputPlan: LogicalPlan = optimize(inputPlan)
         logger.info("Optimized Spark's Logical Plan:\n%s".format(outputPlan))
@@ -718,8 +721,74 @@ class SemanticCache(spark: SparkSession, serverAddress: String) extends SparkLis
  */
 object SemanticCache {
   var semanticCache: Option[SemanticCache] = None
+  var logger: Option[Logger] = None
 
-  def activate(sparkSession: SparkSession, semanticCacheURI: String): Unit = {
-    semanticCache = Some(new SemanticCache(sparkSession, semanticCacheURI))
+  private[client] def getIndex(attrib: Attribute) = attrib.exprId.id.toInt
+
+  private def transformAttributesInExpression(expression: Expression): Expression = {
+    expression match {
+      case ref: AttributeReference => CaerusAttribute(getIndex(ref), ref.dataType)
+      case _ => expression.withNewChildren(expression.children.map(transformAttributesInExpression))
+    }
+  }
+
+  private def transformAttributesInPlan(plan: CaerusPlan): CaerusPlan = {
+    plan match {
+      case Aggregate(groupingExpressions, aggregateExpressions, child) =>
+        val newGroupingExpressions: Seq[Expression] = groupingExpressions.map(transformAttributesInExpression)
+        val newAggregateExpressions: Seq[NamedExpression] =
+          aggregateExpressions.map(transformAttributesInExpression).asInstanceOf[Seq[NamedExpression]]
+        val newChild: CaerusPlan = transformAttributesInPlan(child)
+        Aggregate(newGroupingExpressions, newAggregateExpressions, newChild)
+      case Filter(condition, child) =>
+        val newCondition: Expression = transformAttributesInExpression(condition)
+        val newChild: CaerusPlan = transformAttributesInPlan(child)
+        Filter(newCondition, newChild)
+      case Project(projectList, child) =>
+        val newProjectList: Seq[NamedExpression] =
+          projectList.map(transformAttributesInExpression(_).asInstanceOf[NamedExpression])
+        val newChild: CaerusPlan = transformAttributesInPlan(child)
+        Project(newProjectList, newChild)
+      case RepartitionByExpression(partitionExpressions, child, numPartitions) =>
+        val newPartitionExpressions: Seq[Expression] = partitionExpressions.map(transformAttributesInExpression)
+        val newChild: CaerusPlan = transformAttributesInPlan(child)
+        RepartitionByExpression(newPartitionExpressions, newChild, numPartitions)
+      case CaerusSourceLoad(output, sources, format) =>
+        val newOutput: Seq[Attribute] = output.map(transformAttributesInExpression).asInstanceOf[Seq[Attribute]]
+        CaerusSourceLoad(newOutput, sources, format)
+      case _ => plan.withNewChildren(plan.children.map(transformAttributesInPlan))
+    }
+  }
+
+  private def transformCanonicalized(plan: LogicalPlan): CaerusPlan = {
+    val caerusPlan = plan match {
+      case LogicalRelation(hadoopFsRelation: HadoopFsRelation, output, _, _) =>
+        if (!hadoopFsRelation.fileFormat.isInstanceOf[DataSourceRegister]) {
+          if (logger.isDefined)
+            logger.get.warn("Format provided for Data-Skipping Indices is not supported. Format: %s\n"
+              .format(hadoopFsRelation.fileFormat))
+          return plan
+        }
+        val inputFiles: Seq[FileStatus] = hadoopFsRelation.location.asInstanceOf[PartitioningAwareFileIndex].allFiles()
+        val inputs: Seq[SourceInfo] =
+          inputFiles.map(f => SourceInfo(f.getPath.toString, f.getModificationTime, 0, f.getLen))
+        val format: String = hadoopFsRelation.fileFormat.asInstanceOf[DataSourceRegister].shortName()
+        CaerusSourceLoad(output, inputs, format)
+      case _ =>
+        plan.withNewChildren(plan.children.map(transformCanonicalized))
+    }
+    transformAttributesInPlan(caerusPlan)
+  }
+
+  private[cache] def transform(plan: LogicalPlan): CaerusPlan = {
+    val canonicalizedPlan: CaerusPlan = plan.canonicalized
+    if (logger.isDefined)
+      logger.get.debug("Canonicalized Spark Plan:\n%s".format(canonicalizedPlan))
+    transformCanonicalized(canonicalizedPlan)
+  }
+
+  def activate(sparkSession: SparkSession, semanticCacheURI: String, printFile: Option[String] = None): Unit = {
+    semanticCache = Some(new SemanticCache(sparkSession, semanticCacheURI, printFile))
+    logger = Some(semanticCache.get.logger)
   }
 }

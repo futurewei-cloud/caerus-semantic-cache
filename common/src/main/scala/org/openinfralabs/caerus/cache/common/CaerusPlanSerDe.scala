@@ -29,28 +29,34 @@ class CaerusPlanSerDe {
   }
 
   private[common] def serializeCandidate(candidate: Candidate): String = {
-    candidate match {
+    val jsonFields: List[(String,JValue)] = candidate match {
       case repartitioning: Repartitioning =>
-        val jsonFields: List[(String, JValue)] = List(
+        assert(repartitioning.sizeInfo.isDefined)
+        List(
           ("class", JString(repartitioning.getClass.getName)),
           ("source", JString(repartitioning.source.toJSON)),
-          ("index", JInt(repartitioning.index)))
-        compact(render(JObject(jsonFields)))
+          ("index", JInt(repartitioning.index)),
+          ("sizeInfo", JString(repartitioning.sizeInfo.get.toJSON))
+        )
       case fileSkippingIndexing: FileSkippingIndexing =>
-        val jsonFields: List[(String, JValue)] = List(
+        assert(fileSkippingIndexing.sizeInfo.isDefined)
+        List(
           ("class", JString(fileSkippingIndexing.getClass.getName)),
           ("source", JString(fileSkippingIndexing.source.toJSON)),
-          ("index", JInt(fileSkippingIndexing.index)))
-        compact(render(JObject(jsonFields)))
-      case caching: Caching =>
-        val jsonFields: List[(String, JValue)] = List(
-          ("class", JString(caching.getClass.getName)),
-          ("plan", JString(caching.plan.toJSON))
+          ("index", JInt(fileSkippingIndexing.index)),
+          ("sizeInfo", JString(fileSkippingIndexing.sizeInfo.get.toJSON))
         )
-        compact(render(JObject(jsonFields)))
+      case caching: Caching =>
+        assert(caching.sizeInfo.isDefined)
+        List(
+          ("class", JString(caching.getClass.getName)),
+          ("plan", JString(caching.plan.toJSON)),
+          ("sizeInfo", JString(caching.sizeInfo.get.toJSON))
+        )
       case _ =>
         throw new RuntimeException("Invalid candidate %s.".format(candidate))
     }
+    compact(render(JObject(jsonFields)))
   }
 
   private[common] def deserializeCandidate(json: String): Candidate = {
@@ -59,6 +65,7 @@ class CaerusPlanSerDe {
     assert(jsonAst.isInstanceOf[JObject])
 
     val jsonObject = jsonAst.asInstanceOf[JObject]
+    val sizeInfo: SizeInfo = SizeInfo.fromJSON((jsonObject \ "sizeInfo").asInstanceOf[JString].s)
     val cls = Class.forName((jsonObject \ "class").asInstanceOf[JString].s)
 
     cls match {
@@ -66,15 +73,67 @@ class CaerusPlanSerDe {
         val source: CaerusSourceLoad =
           deserializeCaerusPlan((jsonObject \ "source").asInstanceOf[JString].s).asInstanceOf[CaerusSourceLoad]
         val index: Int = (jsonObject \ "index").asInstanceOf[JInt].num.toInt
-        Repartitioning(source, index)
+        Repartitioning(source, index, Some(sizeInfo))
       case _ if cls == classOf[FileSkippingIndexing] =>
         val source: CaerusSourceLoad =
           deserializeCaerusPlan((jsonObject \ "source").asInstanceOf[JString].s).asInstanceOf[CaerusSourceLoad]
         val index: Int = (jsonObject \ "index").asInstanceOf[JInt].num.toInt
-        FileSkippingIndexing(source, index)
+        FileSkippingIndexing(source, index, Some(sizeInfo))
       case _ if cls == classOf[Caching] =>
         val plan: CaerusPlan = deserializeCaerusPlan((jsonObject \ "plan").asInstanceOf[JString].s)
-        Caching(plan)
+        Caching(plan, Some(sizeInfo))
+      case _ =>
+        throw new RuntimeException("Invalid class to deserialize %s.".format(cls))
+    }
+  }
+
+  private[common] def serializeSizeInfo(sizeInfo: SizeInfo): String = {
+    val jsonFields: List[(String,JValue)] =
+      List(
+        ("writeSize", JInt(sizeInfo.writeSize)),
+        ("readSizeInfo", JString(sizeInfo.readSizeInfo.toJSON))
+      )
+    compact(render(JObject(jsonFields)))
+  }
+
+  private[common] def deserializeSizeInfo(json: String): SizeInfo = {
+    val jsonAst = parse(json)
+
+    assert(jsonAst.isInstanceOf[JObject])
+
+    val jsonObject = jsonAst.asInstanceOf[JObject]
+    val writeSize = (jsonObject \ "writeSize").asInstanceOf[JInt].num.toLong
+    val readSizeInfo = ReadSizeInfo.fromJSON((jsonObject \ "readSizeInfo").asInstanceOf[JString].s)
+    SizeInfo(writeSize, readSizeInfo)
+  }
+
+  private[common] def serializeReadSizeInfo(readInfo: ReadSizeInfo): String = {
+    val jsonFields: List[(String,JValue)] = readInfo match {
+      case basicReadInfo: BasicReadSizeInfo =>
+        List(
+          ("class", JString(basicReadInfo.getClass.getName)),
+          ("readSize", JInt(basicReadInfo.readSize))
+        )
+      case _ =>
+        throw new RuntimeException("Invalid ReadSizeInfo %s.".format(readInfo))
+    }
+    compact(render(JObject(jsonFields)))
+  }
+
+  private[common] def deserializeReadSizeInfo(json: String): ReadSizeInfo = {
+    val jsonAst = parse(json)
+
+    assert(jsonAst.isInstanceOf[JObject])
+
+    val jsonObject = jsonAst.asInstanceOf[JObject]
+    val cls = Class.forName((jsonObject \ "class").asInstanceOf[JString].s)
+
+    cls match {
+      case _ if cls == classOf[BasicReadSizeInfo] =>
+        val readSize: Long = (jsonObject \ "readSize").asInstanceOf[JInt].num.toLong
+        BasicReadSizeInfo(readSize)
+      case _ =>
+        throw new RuntimeException("Invalid class to deserialize %s.".format(cls))
     }
   }
 
@@ -127,7 +186,7 @@ class CaerusPlanSerDe {
           val dec = new Decimal()
           dec.set(BigDecimal(jValue.asInstanceOf[JString].s))
         case TimestampType =>
-          Timestamp.valueOf(jValue.asInstanceOf[JString].s)
+          Timestamp.valueOf(jValue.asInstanceOf[JString].s).getTime*1000L
         case DateType =>
           val dates: Seq[Int] = jValue.asInstanceOf[JString].s.split("-").map(_.toInt)
           assert(dates.length == 3)
@@ -264,10 +323,8 @@ class CaerusPlanSerDe {
         val ru.TypeRef(_, _, Seq(elementType)) = t
         value match {
           case JString(elements) =>
-            var res: Seq[String] = Seq.empty[String]
             assert(elementType <:< ru.typeOf[String])
-            elements.substring(1, elements.length-1).split(", ").foreach(res :+= _)
-            res
+            elements.substring(1, elements.length-1).split(", ").toSeq
           case JArray(elements) =>
             elements.map(parseFromJson[T](_, elementType, children))
           case _ => throw new RuntimeException("Cannot parse %s for type Seq[%s]".format(value, elementType))
@@ -361,10 +418,11 @@ class CaerusPlanSerDe {
   }
 
   private def getCompanionConstructor(tpe: ru.Type): ru.Symbol = {
-    def throwUnsupportedOperation = {
+    def throwUnsupportedOperation: Nothing = {
       throw new UnsupportedOperationException("Unable to find constructor for %s. This could happen if ".format(tpe) +
         "%s is an interface, or a trait without companion object constructor.".format(tpe))
     }
+
     tpe.typeSymbol.asClass.companion match {
       case ru.NoSymbol => throwUnsupportedOperation
       case sym => sym.asTerm.typeSignature.member(ru.TermName("apply")) match {

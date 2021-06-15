@@ -10,4 +10,9 @@ caches {
 }
 server {
     port = 35001
+    mode = 3
+}
+predictor {
+    type = "oracle"
+    file = "trace-file.txt"
 }
