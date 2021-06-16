@@ -9,7 +9,7 @@ case class OraclePredictor(var futurePlans: Seq[CaerusPlan]) extends Predictor w
       logger.warn("Oracle predictions are empty.")
       futurePlans
     } else {
-      if (caerusPlan != futurePlans.head) {
+      if (!caerusPlan.sameResult(futurePlans.head)) {
         logger.warn(
           "Caerus plan does not match the oracle prediction. Plans:\n%s\n%s".format(caerusPlan, futurePlans.head)
         )

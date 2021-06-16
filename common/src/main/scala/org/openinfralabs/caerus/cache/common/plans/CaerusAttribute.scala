@@ -19,14 +19,12 @@ case class CaerusAttribute(index: Int, dataType: DataType) extends Attribute wit
 
   override def equals(other: Any): Boolean = other match {
     case otherCaerusAttribute: CaerusAttribute =>
-      Console.out.println("Compare %s with %s".format(this, otherCaerusAttribute))
       index == otherCaerusAttribute.index && dataType == otherCaerusAttribute.dataType
     case _ => false
   }
 
   override def semanticEquals(other: Expression): Boolean = other match {
     case otherCaerusAttribute: CaerusAttribute =>
-      Console.out.println("Compare %s with %s".format(this, otherCaerusAttribute))
       sameRef(otherCaerusAttribute)
     case _ => false
   }

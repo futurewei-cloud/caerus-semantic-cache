@@ -40,12 +40,10 @@ package object plans {
     override def computeStats(): Statistics = Statistics(size)
 
     override def canEqual(other: Any): Boolean = {
-      Console.out.println("I am here.\n")
       other.isInstanceOf[CaerusSourceLoad] && other.asInstanceOf[CaerusSourceLoad].format == format
     }
 
     override def equals(other: Any): Boolean = {
-      Console.out.println("I am here.\n")
       other match {
         case otherCaerusSourceLoad: CaerusSourceLoad =>
           canEqual(otherCaerusSourceLoad) && sameSources(otherCaerusSourceLoad)

@@ -47,7 +47,7 @@ case class Caching(plan: CaerusPlan, cachingSizeInfo: Option[SizeInfo] = None) e
   def canEqual(other: Any): Boolean = other.isInstanceOf[Caching]
 
   override def equals(other: Any): Boolean = other match {
-    case Caching(otherPlan, _) => plan == otherPlan
+    case Caching(otherPlan, _) => plan.sameResult(otherPlan)
     case _ => false
   }
 }

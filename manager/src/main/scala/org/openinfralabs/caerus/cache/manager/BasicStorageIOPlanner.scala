@@ -55,10 +55,11 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor) ext
       optimizer.optimize(plan, contents ++ Map((candidate, "temp")), addReference(tempReferences))
       tempReferences.contains("temp")
     })
-    logger.info("Remaining candidates:\n%s\n".format(remainingCandidates.mkString("\n")))
+    logger.info("Remaining candidates:\n%s".format(remainingCandidates.mkString("\n")))
 
     // Get future plans.
-    val plans: Seq[CaerusPlan] = Seq(plan) ++ predictor.getPredictions(plan)
+    val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
+    logger.info("Predictions:\n%s".format(plans.mkString("\n")))
 
     // Find initial cost for current contents.
     /*
