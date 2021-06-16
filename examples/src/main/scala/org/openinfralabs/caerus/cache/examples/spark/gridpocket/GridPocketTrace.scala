@@ -1,7 +1,8 @@
 package org.openinfralabs.caerus.cache.examples.spark.gridpocket
 
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.openinfralabs.caerus.cache.client.spark.SemanticCache
+import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
 import org.openinfralabs.caerus.cache.examples.spark.{Query, Trace}
 
 import java.io.{BufferedWriter, FileWriter}
@@ -39,6 +40,18 @@ object GridPocketTrace {
       "<results path> <print path>")
   }
 
+  private def getSupportedPlans(plan: LogicalPlan, supportTree: Support[Boolean]): Seq[LogicalPlan] = {
+    if (supportTree.support)
+      Seq(plan)
+    else
+      plan.children.indices.flatMap(i => getSupportedPlans(plan.children(i), supportTree.children(i)))
+  }
+
+  private def getSupportedPlans(plan: LogicalPlan): Seq[LogicalPlan] = {
+    val supportTree: Support[Boolean] = SemanticCache.checkSupport(plan)
+    getSupportedPlans(plan, supportTree)
+  }
+
   def main(args: Array[ String ]): Unit = {
     // Take arguments.
     if (args.length != 7) {
@@ -70,7 +83,9 @@ object GridPocketTrace {
 
     // Print trace in print path if it is defined.
     if (printPath != "none") {
-      val serializedPlans: Seq[String] = jobs.map(job => SemanticCache.transform(job._2.queryExecution.logical).toJSON)
+      val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.logical)
+      val supportedPlans: Seq[LogicalPlan] = logicalPlans.flatMap(plan => getSupportedPlans(plan))
+      val serializedPlans: Seq[String] = supportedPlans.map(plan => SemanticCache.transform(plan).toJSON)
       val out: BufferedWriter = new BufferedWriter(new FileWriter(printPath))
       serializedPlans.foreach(serializedPlan => out.write("%s\n".format(serializedPlan)))
       out.close()

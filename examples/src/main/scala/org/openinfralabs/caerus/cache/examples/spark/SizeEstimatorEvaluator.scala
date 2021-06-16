@@ -1,13 +1,26 @@
 package org.openinfralabs.caerus.cache.examples.spark
 
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.openinfralabs.caerus.cache.client.spark.SemanticCache
+import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
 import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SizeEstimator}
 import org.openinfralabs.caerus.cache.common.Candidate
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.examples.spark.gridpocket.{GridPocketSchemaProvider, GridPocketTrace}
 
 object SizeEstimatorEvaluator {
+  private def getSupportedPlans(plan: LogicalPlan, supportTree: Support[Boolean]): Seq[LogicalPlan] = {
+    if (supportTree.support)
+      Seq(plan)
+    else
+      plan.children.indices.flatMap(i => getSupportedPlans(plan.children(i), supportTree.children(i)))
+  }
+
+  private def getSupportedPlans(plan: LogicalPlan): Seq[LogicalPlan] = {
+    val supportTree: Support[Boolean] = SemanticCache.checkSupport(plan)
+    getSupportedPlans(plan, supportTree)
+  }
+
   def main(args: Array[ String ]) {
     // Take arguments.
     if (args.length != 6) {
@@ -33,8 +46,11 @@ object SizeEstimatorEvaluator {
 
     // Find all the candidates from these plans.
     val candidateSelector: CandidateSelector = BasicCandidateSelector()
-    val plans: Seq[CaerusPlan] = jobs.map(job => SemanticCache.transform(job._2.queryExecution.logical))
+    val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.logical)
+    val supportedPlans: Seq[LogicalPlan] = logicalPlans.flatMap(plan => getSupportedPlans(plan))
+    val plans: Seq[CaerusPlan] = supportedPlans.map(plan => SemanticCache.transform(plan))
     val candidates: Seq[Candidate] = plans.flatMap(candidateSelector.getCandidates)
+    Console.out.println("Candidates:\n%s".format(candidates.mkString("\n")))
 
     // Calculate the estimates for all the candidates.
     val sizeEstimator: SizeEstimator = BasicSizeEstimator()

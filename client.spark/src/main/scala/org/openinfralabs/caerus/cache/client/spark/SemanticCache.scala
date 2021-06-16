@@ -225,29 +225,6 @@ class SemanticCache(
     }
   }
 
-  private def checkSupport(plan: LogicalPlan): Support[Boolean] = {
-    val children: Seq[Support[Boolean]] = plan.children.map(checkSupport)
-    val support: Boolean = {
-      if (children.forall(child => child.support)) {
-        plan match {
-          case Aggregate(groupingExpressions, aggregateExpressions, _) =>
-            val groupCheck: Boolean = groupingExpressions.forall(expr => !expr.isInstanceOf[Nondeterministic])
-            val aggregateCheck: Boolean = aggregateExpressions.forall(expr => !expr.isInstanceOf[Nondeterministic])
-            groupCheck && aggregateCheck
-          case Filter(condition, _) => !condition.isInstanceOf[Nondeterministic]
-          case RepartitionByExpression(partitionExpressions, _, _) =>
-            partitionExpressions.forall(expr => !expr.isInstanceOf[Nondeterministic])
-          case _: Distinct | _: Project | _: Repartition => true
-          case LogicalRelation(_: HadoopFsRelation, _, _, _) => true
-          case _ => false
-        }
-      } else {
-        false
-      }
-    }
-    Support[Boolean](support, children)
-  }
-
   private def checkAccessNode(plan: LogicalPlan): Boolean = {
     plan match {
       case _: Aggregate | _: Join | _: Project | _: Filter | LogicalRelation(_: HadoopFsRelation, _, _, _) => true
@@ -256,7 +233,7 @@ class SemanticCache(
   }
 
   private def optimize(inputPlan: LogicalPlan): LogicalPlan = {
-    val supportTree: Support[Boolean] = checkSupport(inputPlan)
+    val supportTree: Support[Boolean] = SemanticCache.checkSupport(inputPlan)
     logger.info("Support: %s\n".format(supportTree))
     optimize(inputPlan, supportTree)
   }
@@ -554,7 +531,7 @@ class SemanticCache(
     applyOptimization = false
     val logicalPlan: LogicalPlan = intermediateDF.queryExecution.optimizedPlan
     applyOptimization = true
-    if (!checkSupport(logicalPlan).support || !checkAccessNode(logicalPlan)) {
+    if (!SemanticCache.checkSupport(logicalPlan).support || !checkAccessNode(logicalPlan)) {
       logger.warn("The following plan is not supported for caching:\n%s".format(logicalPlan))
       return 0L
     }
@@ -708,6 +685,29 @@ object SemanticCache {
   var logger: Option[Logger] = None
 
   private[client] def getIndex(attrib: Attribute) = attrib.exprId.id.toInt
+
+  private[cache] def checkSupport(plan: LogicalPlan): Support[Boolean] = {
+    val children: Seq[Support[Boolean]] = plan.children.map(checkSupport)
+    val support: Boolean = {
+      if (children.forall(child => child.support)) {
+        plan match {
+          case Aggregate(groupingExpressions, aggregateExpressions, _) =>
+            val groupCheck: Boolean = groupingExpressions.forall(expr => !expr.isInstanceOf[Nondeterministic])
+            val aggregateCheck: Boolean = aggregateExpressions.forall(expr => !expr.isInstanceOf[Nondeterministic])
+            groupCheck && aggregateCheck
+          case Filter(condition, _) => !condition.isInstanceOf[Nondeterministic]
+          case RepartitionByExpression(partitionExpressions, _, _) =>
+            partitionExpressions.forall(expr => !expr.isInstanceOf[Nondeterministic])
+          case _: Distinct | _: Project | _: Repartition => true
+          case LogicalRelation(_: HadoopFsRelation, _, _, _) => true
+          case _ => false
+        }
+      } else {
+        false
+      }
+    }
+    Support[Boolean](support, children)
+  }
 
   private def transformAttributesInExpression(expression: Expression): Expression = {
     expression match {
