@@ -48,8 +48,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   }
 
   private val operationMode: Mode = {
-    if (conf.hasPath("operationMode")) {
-      val operationMode: Int = conf.getInt("operationMode")
+    if (conf.hasPath("server.mode")) {
+      val operationMode: Int = conf.getInt("server.mode")
       logger.info("Operation mode set to %s".format(operationMode))
       Mode(operationMode)
     } else {
