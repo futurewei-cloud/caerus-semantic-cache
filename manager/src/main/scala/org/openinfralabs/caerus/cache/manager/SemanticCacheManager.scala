@@ -85,6 +85,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val filename: String = conf.getString(predictorConfStr + ".file")
       val source = Source.fromFile(filename)
       val futurePlans: Seq[CaerusPlan] = source.getLines().map(CaerusPlan.fromJSON).toSeq
+      logger.info("Future Plans:\n%s".format(futurePlans.mkString("\n")))
       OraclePredictor(futurePlans)
   }
   private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor)
