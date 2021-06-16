@@ -46,7 +46,7 @@ object SizeEstimatorEvaluator {
 
     // Find all the candidates from these plans.
     val candidateSelector: CandidateSelector = BasicCandidateSelector()
-    val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.logical)
+    val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.optimizedPlan)
     val supportedPlans: Seq[LogicalPlan] = logicalPlans.flatMap(plan => getSupportedPlans(plan))
     val plans: Seq[CaerusPlan] = supportedPlans.map(plan => SemanticCache.transform(plan))
     val candidates: Seq[Candidate] = plans.flatMap(candidateSelector.getCandidates)

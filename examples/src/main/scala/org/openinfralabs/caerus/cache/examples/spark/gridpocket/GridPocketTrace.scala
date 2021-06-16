@@ -83,7 +83,7 @@ object GridPocketTrace {
 
     // Print trace in print path if it is defined.
     if (printPath != "none") {
-      val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.logical)
+      val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.optimizedPlan)
       val supportedPlans: Seq[LogicalPlan] = logicalPlans.flatMap(plan => getSupportedPlans(plan))
       val serializedPlans: Seq[String] = supportedPlans.map(plan => SemanticCache.transform(plan).toJSON)
       val out: BufferedWriter = new BufferedWriter(new FileWriter(printPath))
