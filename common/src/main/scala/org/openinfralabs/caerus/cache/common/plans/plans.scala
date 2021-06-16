@@ -29,6 +29,12 @@ package object plans {
     format: String
   ) extends CaerusLoad(output) {
 
+    private def sameSources(other: CaerusSourceLoad): Boolean = {
+      val sourceSet = sources.toSet[SourceInfo]
+      val otherSourceSet = other.sources.toSet[SourceInfo]
+      sourceSet == otherSourceSet
+    }
+
     def size: Long = sources.map(_.length).sum
 
     override def computeStats(): Statistics = Statistics(size)
@@ -40,7 +46,8 @@ package object plans {
     override def equals(other: Any): Boolean = {
       other match {
         case otherCaerusSourceLoad: CaerusSourceLoad =>
-          canEqual(otherCaerusSourceLoad) && otherCaerusSourceLoad.sources == sources
+          Console.out.println("I am here.\n")
+          canEqual(otherCaerusSourceLoad) && sameSources(otherCaerusSourceLoad)
         case _ =>
           false
       }
