@@ -60,18 +60,21 @@ object GridPocketTrace {
           .appName(name = "GridPocketTrace")
           .getOrCreate()
 
-    // Activate semantic cache.
-    if (semanticCacheURI != "none") {
-      if (printPath != "none")
-        SemanticCache.activate(spark, semanticCacheURI, Some(printPath))
-      else
+    // Activate semantic cache if it is defined.
+    if (semanticCacheURI != "none")
         SemanticCache.activate(spark, semanticCacheURI)
-    }
 
     // Create trace.
     val jobs: Seq[(String,DataFrame)] = createTrace(spark, new GridPocketSchemaProvider, year, inputPath)
     val trace: Trace = new Trace(jobs)
-    Console.out.println(trace)
+
+    // Print trace in print path if it is defined.
+    if (printPath != "none") {
+      val serializedPlans: Seq[String] = jobs.map(job => SemanticCache.transform(job._2.queryExecution.logical).toJSON)
+      val out: BufferedWriter = new BufferedWriter(new FileWriter(printPath))
+      serializedPlans.foreach(serializedPlan => out.write("%s\n".format(serializedPlan)))
+      out.close()
+    }
 
     // Run trace.
     val results: Seq[(String,Long)] = trace.execute(outputPath)
@@ -80,11 +83,8 @@ object GridPocketTrace {
     spark.stop()
 
     // Write result in output path.
-    val out = new BufferedWriter(new FileWriter(resultsPath))
-    results.foreach(result => {
-      Console.out.println("%s,%s".format(result._1, result._2))
-      out.write("%s,%s\n".format(result._1, result._2))
-    })
+    val out: BufferedWriter = new BufferedWriter(new FileWriter(resultsPath))
+    results.foreach(result => out.write("%s,%s\n".format(result._1, result._2)))
     out.close()
   }
 }

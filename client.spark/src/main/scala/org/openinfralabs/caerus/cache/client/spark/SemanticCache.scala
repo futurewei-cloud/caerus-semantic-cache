@@ -20,8 +20,6 @@ import org.openinfralabs.caerus.cache.common.plans.{SourceInfo, _}
 import org.openinfralabs.caerus.cache.grpc.service._
 import org.slf4j.{Logger, LoggerFactory}
 
-import java.io.{BufferedWriter, File, FileWriter}
-
 /**
  * Client module used with Scala Spark Client that allows interaction with a Semantic Cache service.
  *
@@ -30,7 +28,6 @@ import java.io.{BufferedWriter, File, FileWriter}
 class SemanticCache(
   spark: SparkSession,
   serverAddress: String,
-  printFile: Option[String] = None
 ) extends SparkListener {
   private final val logger: Logger = LoggerFactory.getLogger(this.getClass)
   private val ipPair: (String, Int) = getIPFromString(serverAddress)
@@ -40,7 +37,6 @@ class SemanticCache(
   private var skip: Boolean = false
   private val sizeEstimator: SizeEstimator = BasicSizeEstimator()
   private val candidateSelector: CandidateSelector = BasicCandidateSelector()
-  private val previousPlan: LogicalPlan = null
 
   // Activate optimization for spark session.
   logger.info("Activate Semantic Cache optimization.")
@@ -54,13 +50,8 @@ class SemanticCache(
       throw new RuntimeException("Semantic Cache Client was unable to register to Semantic Cache Manager.")
   }
   private val mode: Mode = {
-    if (printFile.isDefined) {
-      logger.info("Print only mode activated.")
-      Mode(1)
-    } else {
-      logger.info("Mode %s activated.".format(registerReply.mode))
-      Mode(registerReply.mode)
-    }
+    logger.info("Mode %s activated.".format(registerReply.mode))
+    Mode(registerReply.mode)
   }
   private val timeout: Long = registerReply.terminationTimeout/3
   logger.info("Start heartbeats every %s ms".format(timeout))
@@ -279,13 +270,6 @@ class SemanticCache(
       val inputCaerusPlan: CaerusPlan = transform(inputPlan)
       logger.info("Initial Caerus Plan:\n%s".format(inputCaerusPlan))
       val inputSerializedCaerusPlan: String = inputCaerusPlan.toJSON
-      if (printFile.isDefined) {
-        logger.info("Printing Serialized Plan to file and returning without changes.")
-        val bw = new BufferedWriter(new FileWriter(new File(printFile.get), true))
-        bw.write(inputSerializedCaerusPlan + "\n")
-        bw.close()
-        return inputPlan
-      }
       logger.info("Initial Serialized Caerus Plan: %s\n".format(inputSerializedCaerusPlan))
       val candidates: Seq[Candidate] = {
         if (mode == Mode.FULLY_AUTOMATIC)
@@ -787,8 +771,8 @@ object SemanticCache {
     transformCanonicalized(canonicalizedPlan)
   }
 
-  def activate(sparkSession: SparkSession, semanticCacheURI: String, printFile: Option[String] = None): Unit = {
-    semanticCache = Some(new SemanticCache(sparkSession, semanticCacheURI, printFile))
+  def activate(sparkSession: SparkSession, semanticCacheURI: String): Unit = {
+    semanticCache = Some(new SemanticCache(sparkSession, semanticCacheURI))
     logger = Some(semanticCache.get.logger)
   }
 }
