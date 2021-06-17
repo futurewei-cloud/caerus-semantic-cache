@@ -29,6 +29,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   )
   private val tiers: mutable.HashMap[Tier, String] = mutable.HashMap.empty[Tier, String]
   private val capacity: mutable.HashMap[Tier, Long] = mutable.HashMap.empty[Tier, Long]
+  private var lastTier: Option[Tier] = None
   for (tier <- tierNames.keys) {
     val tierConfStr: String = "caches." + tier
     val siteConfStr: String = tierConfStr + ".site"
@@ -39,8 +40,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       if (size <= 0) {
         logger.warn("Size for tier %s is lower or equal to 0".format(tier))
       } else {
-          tiers(tierNames(tier)) = site
-          capacity(tierNames(tier)) = size
+        tiers(tierNames(tier)) = site
+        capacity(tierNames(tier)) = size
+        lastTier = Some(tierNames(tier))
       }
     } else {
         logger.warn("Not all parameters are set for tier %s.".format(tier))
@@ -85,7 +87,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val filename: String = conf.getString(predictorConfStr + ".file")
       val source = Source.fromFile(filename)
       val futurePlans: Seq[CaerusPlan] = source.getLines().map(CaerusPlan.fromJSON).toSeq
-      logger.info("Future Plans:\n%s".format(futurePlans.mkString("\n")))
+      logger.debug("Future Plans:\n%s".format(futurePlans.mkString("\n")))
       OraclePredictor(futurePlans)
   }
   private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor)
@@ -403,10 +405,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             path => addReference(request.clientId, path)
           )
         } else if (operationMode == Mode.FULLY_AUTOMATIC) {
+          val cap: Long = {
+            if (lastTier.isDefined)
+              capacity(lastTier.get)
+            else
+              0L
+          }
           planner.optimize(
             caerusPlan,
             availableContents.toMap[Candidate,String],
-            request.candidates.map(Candidate.fromJSON)
+            request.candidates.map(Candidate.fromJSON),
+            cap
           )
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
