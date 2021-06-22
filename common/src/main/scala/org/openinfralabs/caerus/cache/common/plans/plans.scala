@@ -1,6 +1,6 @@
 package org.openinfralabs.caerus.cache.common
 
-import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, Statistics}
+import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, Statistics, UnaryNode}
 
 package object plans {
   import org.apache.spark.sql.catalyst.expressions.Attribute
@@ -14,8 +14,16 @@ package object plans {
       caerusPlanSerDe.deserializeCaerusPlan(json)
     }
 
+    def preOrder(plan: CaerusPlan): Seq[CaerusPlan] = {
+      plan.withNewChildren(plan.children.map(_ => CaerusEmpty())) +: plan.children.flatMap(CaerusPlan.preOrder)
+    }
+
     def postOrder(plan: CaerusPlan): Seq[CaerusPlan] = {
       plan.children.flatMap(CaerusPlan.postOrder) :+ plan.withNewChildren(plan.children.map(_ => CaerusEmpty()))
+    }
+
+    def getRoot(plan: CaerusPlan): CaerusPlan = {
+      plan.withNewChildren(plan.children.map(_ => CaerusEmpty()))
     }
   }
 
@@ -128,7 +136,41 @@ package object plans {
     override val output: Seq[Attribute],
     @transient child: CaerusPlan,
     path: Seq[String],
-    index: Int) extends CaerusLoad(output) {
+    index: Int
+  ) extends CaerusLoad(output) {
     override val innerChildren: Seq[CaerusPlan] = Seq(child)
+  }
+
+  abstract class CaerusWrite extends UnaryNode {
+    val name = "none"
+    override def output: Seq[Attribute] = child.output
+  }
+  case class CaerusRepartitioning(override val name: String, override val child: CaerusSourceLoad, index: Int)
+    extends CaerusWrite
+  case class CaerusFileSkippingIndexing(override val name: String, override val child: CaerusSourceLoad, index: Int)
+    extends CaerusWrite
+  case class CaerusCaching(override val name: String, override val child: CaerusPlan) extends CaerusWrite
+
+  case class CaerusDelete(paths: Seq[String]) extends CaerusPlan {
+    override def output: Seq[Attribute] = Seq.empty[Attribute]
+    override def children: Seq[CaerusPlan] = Seq.empty[CaerusPlan]
+  }
+
+
+  case class CaerusIf(override val children: Seq[CaerusPlan]) extends CaerusPlan {
+    assert(this.children.size == 3)
+    assert(this.children(1).output == this.children(2).output)
+
+    override def output: Seq[Attribute] = children(1).output
+  }
+
+  case class CaerusTrue() extends LogicalPlan {
+    override def output: Seq[Attribute] = Seq.empty[Attribute]
+    override def children: Seq[CaerusPlan] = Seq.empty[CaerusPlan]
+  }
+
+  case class CaerusFalse() extends LogicalPlan {
+    override def output: Seq[Attribute] = Seq.empty[Attribute]
+    override def children: Seq[CaerusPlan] = Seq.empty[CaerusPlan]
   }
 }

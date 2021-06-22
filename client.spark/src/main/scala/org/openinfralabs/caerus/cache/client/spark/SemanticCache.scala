@@ -8,7 +8,9 @@ import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
+import org.apache.spark.sql.execution.QueryExecution
 import org.apache.spark.sql.execution.datasources._
+import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types._
@@ -202,6 +204,63 @@ class SemanticCache(
         )
         logger.info("New CaerusSourceLoad:\n%s".format(newSourceLoad))
         transformBack(newSourceLoad, logicalRelation, sourceLoad)
+      case CaerusIf(children) =>
+        val conditionPlan: LogicalPlan = transformBack(children.head, inputPlan, inputCaerusPlan)
+        conditionPlan match {
+          case CaerusTrue() => transformBack(children(1), inputPlan, inputCaerusPlan)
+          case CaerusFalse() => transformBack(children(2), inputPlan, inputCaerusPlan)
+        }
+      case CaerusRepartitioning(name, child, index) =>
+        applyOptimization = false
+        assert(inputPlan.isInstanceOf[LogicalRelation])
+        val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
+        assert(logicalRelation.relation.isInstanceOf[HadoopFsRelation])
+        val hadoopFsRelation = logicalRelation.relation.asInstanceOf[HadoopFsRelation]
+        val loadDF: DataFrame = spark.read
+          .format(child.format)
+          .options(hadoopFsRelation.options)
+          .schema(hadoopFsRelation.dataSchema)
+          .load(child.sources.map(source => source.path):_*)
+        applyOptimization = false
+        val bytesWritten: Long = startRepartitioning(
+          loadDF,
+          loadDF.columns(index),
+          Tier.STORAGE_DISK,
+          name.split(Path.SEPARATOR).last
+        )
+        if (bytesWritten >= 0) {
+          CaerusTrue()
+        } else {
+          CaerusFalse()
+        }
+      case CaerusFileSkippingIndexing(name, child, index) =>
+        assert(inputPlan.isInstanceOf[LogicalRelation])
+        val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
+        assert(logicalRelation.relation.isInstanceOf[HadoopFsRelation])
+        val hadoopFsRelation = logicalRelation.relation.asInstanceOf[HadoopFsRelation]
+        val loadDF: DataFrame = spark.read
+          .format(child.format)
+          .options(hadoopFsRelation.options)
+          .schema(hadoopFsRelation.dataSchema)
+          .load(child.sources.map(source => source.path):_*)
+        val bytesWritten: Long = startFileSkippingIndexing(
+          loadDF,
+          loadDF.columns(index),
+          Tier.STORAGE_DISK,
+          name.split(Path.SEPARATOR).last
+        )
+        if (bytesWritten >= 0) {
+          CaerusTrue()
+        } else {
+          CaerusFalse()
+        }
+      case CaerusCaching(name, child) =>
+        val bytesWritten: Long = startCacheIntermediateData(child, Tier.STORAGE_DISK, name.split(Path.SEPARATOR).last)
+        if (bytesWritten >= 0) {
+          CaerusTrue()
+        } else {
+          CaerusFalse()
+        }
       case Project(projectList, child) =>
         val newChild: LogicalPlan = inputPlan match {
           case project: Project => transformBack(child, project.child, inputCaerusPlan.asInstanceOf[Project].child)
@@ -291,29 +350,7 @@ class SemanticCache(
     heartbeatThread.interrupt()
   }
 
-  /**
-   * Repartition and store given dataset according to the provided parameters.
-   *
-   * This method works only for single partition attributes and it produces only range re-partitioning. The data is
-   * additionally sorted, not only partitioned by the given attribute.
-   *
-   * @param loadDF Source dataframe used for repartitioning.
-   * @param partitionAttribute Name of the primary partition attribute.
-   * @param name Name used to find the repartitioned dataset, if operation is a success.
-   * @param tier [[Tier]] to which to store the repartitioned dataset.
-   *
-   * @return Returns the size of the repartitioned data if operation is successful. Otherwise, it prints a warning
-   *         failure message in the log, explaining why repartitioning failed and returns 0.
-   *
-   * @since 0.0.0
-   */
-  def repartitioning(loadDF: DataFrame, partitionAttribute: String, tier: Tier, name: String): Long = {
-    // See if mode allows this operation.
-    if (mode != Mode.MANUAL_WRITE) {
-      logger.warn("Repartitioning not allowed for mode %s. Ignoring request.".format(mode))
-      return 0L
-    }
-
+  private def startRepartitioning(loadDF: DataFrame, partitionAttribute: String, tier: Tier, name: String): Long = {
     // Make runtime checks, to ensure support.
     val logicalPlan: LogicalPlan = loadDF.queryExecution.logical
     if (!logicalPlan.isInstanceOf[LogicalRelation]) {
@@ -355,19 +392,27 @@ class SemanticCache(
     }
 
     // Repartition data.
-    try {
+    applyOptimization = false
+    val triggeredException: Boolean = try {
       loadDF.repartitionByRange(numPartitions, loadDF.col(partitionAttribute)).write.parquet(path)
+      false
     } catch {
       case e: Exception =>
         logger.warn("Cannot write candidate %s. Exception message: %s".format(candidate, e.getMessage))
+        true
+    } finally {
+      applyOptimization = true
+    }
+    if (triggeredException) {
         try {
           val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-          val request: CommitReservationRequest = CommitReservationRequest(clientId, commit = false, name)
+          val request: CommitReservationRequest = CommitReservationRequest(clientId, commit=false, name)
           stub.commitReservation(request)
         } catch {
-          case e: Exception => logger.warn("Cancel reservation failed: %s".format(e.getMessage))
+          case e: Exception =>
+            logger.warn("Cancel reservation failed: %s".format(e.getMessage))
         }
-        return 0L
+        return -1L
     }
 
     // Calculate actual size.
@@ -388,27 +433,29 @@ class SemanticCache(
   }
 
   /**
-   * Create file-skipping indices from the given dataset and store them, according to the provided parameters.
+   * Repartition and store given dataset according to the provided parameters.
    *
-   * This method produces only min/max file-skipping indices for a single attribute.
+   * This method works only for single partition attributes and it produces only range re-partitioning. The data is
+   * additionally sorted, not only partitioned by the given attribute.
    *
-   * @param loadDF Source dataframe used for producing file-skipping indices.
-   * @param indexedAttribute Attribute for which file-skipping indices is constructed.
-   * @param tier [[Tier]] to which to store the file-skipping indices.
-   * @param name Name used to find the file-skipping indices, if operation is a success.
-   *
-   * @return Returns the size of the resulting file-skipping indices if operation is successful. Otherwise, it prints a
-   *         warning failure message in the log, explaining why the operation failed and returns 0.
-   *
+   * @param loadDF Source dataframe used for repartitioning.
+   * @param partitionAttribute Name of the primary partition attribute.
+   * @param name Name used to find the repartitioned dataset, if operation is a success.
+   * @param tier [[Tier]] to which to store the repartitioned dataset.
+   * @return Returns the size of the repartitioned data if operation is successful. Otherwise, it prints a warning
+   *         failure message in the log, explaining why repartitioning failed and returns 0.
    * @since 0.0.0
    */
-  def fileSkippingIndexing(loadDF: DataFrame, indexedAttribute: String, tier: Tier, name: String): Long = {
+  def repartitioning(loadDF: DataFrame, partitionAttribute: String, tier: Tier, name: String): Long = {
     // See if mode allows this operation.
     if (mode != Mode.MANUAL_WRITE) {
-      logger.warn("Creating files-skipping indices not allowed for mode %s. Ignoring request.".format(mode))
+      logger.warn("Repartitioning not allowed for mode %s. Ignoring request.".format(mode))
       return 0L
     }
+    startRepartitioning(loadDF, partitionAttribute, tier, name)
+  }
 
+  private def startFileSkippingIndexing(loadDF: DataFrame, indexedAttribute: String, tier: Tier, name: String): Long = {
     // Transform load DataFrame to CaerusLoad.
     val logicalPlan: LogicalPlan = loadDF.queryExecution.logical
     if (!logicalPlan.isInstanceOf[LogicalRelation]) {
@@ -491,8 +538,100 @@ class SemanticCache(
     // Calculate actual size.
     val outputDF: DataFrame =
       spark.read
-          .schema(getSchemaForLoadWithIndices(caerusSourceLoad.output(index).dataType, index))
-          .json(path)
+        .schema(getSchemaForLoadWithIndices(caerusSourceLoad.output(index).dataType, index))
+        .json(path)
+    val outputSize: Long = outputDF.queryExecution.logical.stats.sizeInBytes.toLong
+
+    // Commit candidate to become available for reading and exit.
+    try {
+      val stub = SemanticCacheServiceGrpc.blockingStub(channel)
+      val request: CommitReservationRequest = CommitReservationRequest(clientId, commit=true, name, outputSize)
+      stub.commitReservation(request)
+    } catch {
+      case e: Exception =>
+        logger.warn("Commit reservation failed: %s".format(e.getMessage))
+        return 0L
+    }
+    outputSize
+  }
+
+  /**
+   * Create file-skipping indices from the given dataset and store them, according to the provided parameters.
+   *
+   * This method produces only min/max file-skipping indices for a single attribute.
+   *
+   * @param loadDF Source dataframe used for producing file-skipping indices.
+   * @param indexedAttribute Attribute for which file-skipping indices is constructed.
+   * @param tier [[Tier]] to which to store the file-skipping indices.
+   * @param name Name used to find the file-skipping indices, if operation is a success.
+   * @return Returns the size of the resulting file-skipping indices if operation is successful. Otherwise, it prints a
+   *         warning failure message in the log, explaining why the operation failed and returns 0.
+   * @since 0.0.0
+   */
+  def fileSkippingIndexing(loadDF: DataFrame, indexedAttribute: String, tier: Tier, name: String): Long = {
+    // See if mode allows this operation.
+    if (mode != Mode.MANUAL_WRITE) {
+      logger.warn("Creating files-skipping indices not allowed for mode %s. Ignoring request.".format(mode))
+      return 0L
+    }
+    startFileSkippingIndexing(loadDF, indexedAttribute, tier, name)
+  }
+
+  private def startCacheIntermediateData(logicalPlan: LogicalPlan, tier: Tier, name: String): Long = {
+    // Transform logical plan to CaerusPlan.
+    val caerusPlan = transform(logicalPlan)
+    val candidate: Caching = Caching(caerusPlan)
+    sizeEstimator.estimateSize(candidate)
+    logger.debug("JSON Candidate:\n%s".format(candidate.toJSON))
+    val path: String = try {
+      val stub = SemanticCacheServiceGrpc.blockingStub(channel)
+      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, tier.id, name)
+      stub.reserve(request).path
+    } catch {
+      case e: Exception =>
+        logger.warn("Reservation failed: %s".format(e.getMessage))
+        return 0L
+    }
+
+    // Cache intermediate data.
+    if (mode == Mode.FULLY_AUTOMATIC)
+      applyOptimization = false
+    val triggeredException: Boolean = try {
+      val writePlan: LogicalPlan = InsertIntoHadoopFsRelationCommand(
+        outputPath = new Path(path),
+        staticPartitions = Map.empty,
+        ifPartitionNotExists = false,
+        partitionColumns = Seq.empty[Attribute],
+        bucketSpec = None,
+        fileFormat = new ParquetFileFormat(),
+        options = Map.empty[String,String],
+        query = logicalPlan,
+        mode = SaveMode.Overwrite,
+        catalogTable = None,
+        fileIndex = None,
+        outputColumnNames = logicalPlan.output.map(_.name))
+      val queryExecution: QueryExecution = spark.sessionState.executePlan(writePlan)
+      queryExecution.toRdd
+      false
+    } catch {
+      case e: Exception =>
+        logger.warn("Cannot write candidate %s. Exception message:\n%s\n".format(candidate, e.getMessage))
+        true
+    }
+    if (triggeredException) {
+      try {
+        val stub = SemanticCacheServiceGrpc.blockingStub(channel)
+        val request: CommitReservationRequest = CommitReservationRequest(clientId, commit=false, name)
+        stub.commitReservation(request)
+      } catch {
+        case e: Exception =>
+          logger.warn("Cancel reservation failed: %s".format(e.getMessage))
+      }
+      return 0L
+    }
+
+    // Calculate actual size.
+    val outputDF: DataFrame = spark.read.parquet(path)
     val outputSize: Long = outputDF.queryExecution.logical.stats.sizeInBytes.toLong
 
     // Commit candidate to become available for reading and exit.
@@ -514,10 +653,8 @@ class SemanticCache(
    * @param intermediateDF Intermediate dataframe used for storing.
    * @param tier [[Tier]] to which to store the intermediate data.
    * @param name Name used to find the intermediate data, if operation is a success.
-   *
    * @return Returns the size of the resulting data if operation is successful. Otherwise, it prints a
    *         warning failure message in the log, explaining why the operation failed and returns 0.
-   *
    * @since 0.0.0
    */
   def cacheIntermediateData(intermediateDF: DataFrame, tier: Tier, name: String): Long = {
@@ -527,7 +664,7 @@ class SemanticCache(
       return 0L
     }
 
-    // Transform load DataFrame to CaerusPlan.
+    // Get logical plan from intermediate DF.
     applyOptimization = false
     val logicalPlan: LogicalPlan = intermediateDF.queryExecution.optimizedPlan
     applyOptimization = true
@@ -535,51 +672,7 @@ class SemanticCache(
       logger.warn("The following plan is not supported for caching:\n%s".format(logicalPlan))
       return 0L
     }
-    val caerusPlan = transform(logicalPlan)
-    val candidate: Caching = Caching(caerusPlan)
-    sizeEstimator.estimateSize(candidate)
-    logger.debug("JSON Candidate:\n%s".format(candidate.toJSON))
-    val path: String = try {
-      val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-      val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, tier.id, name)
-      stub.reserve(request).path
-    } catch {
-      case e: Exception =>
-        logger.warn("Reservation failed: %s".format(e.getMessage))
-        return 0L
-    }
-
-    // Cache intermediate data.
-    try {
-      intermediateDF.write.parquet(path)
-    } catch {
-      case e: Exception =>
-        logger.warn("Cannot write candidate %s. Exception message:\n%s\n".format(candidate, e.getMessage))
-        try {
-          val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-          val request: CommitReservationRequest = CommitReservationRequest(clientId, commit=false, name)
-          stub.commitReservation(request)
-        } catch {
-          case e: Exception => logger.warn("Cancel reservation failed: %s".format(e.getMessage))
-        }
-        return 0L
-    }
-
-    // Calculate actual size.
-    val outputDF: DataFrame = spark.read.parquet(path)
-    val outputSize: Long = outputDF.queryExecution.logical.stats.sizeInBytes.toLong
-
-    // Commit candidate to become available for reading and exit.
-    try {
-      val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-      val request: CommitReservationRequest = CommitReservationRequest(clientId, commit=true, name, outputSize)
-      stub.commitReservation(request)
-    } catch {
-      case e: Exception =>
-        logger.warn("Commit reservation failed: %s".format(e.getMessage))
-        return 0L
-    }
-    outputSize
+    startCacheIntermediateData(logicalPlan, tier, name)
   }
 
   /**

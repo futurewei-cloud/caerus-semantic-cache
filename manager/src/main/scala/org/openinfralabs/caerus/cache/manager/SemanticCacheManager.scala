@@ -59,6 +59,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       Mode(3)
     }
   }
+  if (operationMode == Mode.FULLY_AUTOMATIC && (tiers.size > 1 || !tiers.contains(Tier.STORAGE_DISK))) {
+    logger.error("Operation mode 3 cannot be defined with multiple tiers. Only with STORAGE_DISK.")
+    System.exit(-1)
+  }
 
   private val port: Int = {
     if (conf.hasPath("server.port"))
@@ -86,11 +90,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     case "oracle" =>
       val filename: String = conf.getString(predictorConfStr + ".file")
       val source = Source.fromFile(filename)
-      val futurePlans: Seq[CaerusPlan] = source.getLines().map(CaerusPlan.fromJSON).toSeq
+      val futurePlans: Seq[ CaerusPlan ] = source.getLines().map(CaerusPlan.fromJSON).toSeq
       logger.debug("Future Plans:\n%s".format(futurePlans.mkString("\n")))
       OraclePredictor(futurePlans)
   }
-  private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor)
+  private val outputPath: String = {
+    if (tiers.contains(Tier.STORAGE_DISK))
+      tiers(Tier.STORAGE_DISK)
+    else
+      "none"
+  }
+  private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
@@ -139,16 +149,16 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     res
   }
 
-  private def getPath(candidate: Candidate, tier: Tier): String = {
+  private def generatePath(candidateName: String, tier: Tier): String = {
     if (!tiers.contains(tier))
       throw new RuntimeException("Tier %s is not associated with a cache.".format(tier))
-    val candidateName = candidate match {
-      case _: Repartitioning => "R"
-      case _: FileSkippingIndexing => "FSI"
-      case _: Caching => "C"
-      case _ => throw new RuntimeException("Candidate %s not recognized.".format(candidate))
-    }
     tiers(tier) + Path.SEPARATOR + candidateName + getPathId.toString
+  }
+
+  private def getPath(candidateName: String, tier: Tier): String = {
+    if (!tiers.contains(tier))
+      throw new RuntimeException("Tier %s is not associated with a cache.".format(tier))
+    tiers(tier) + Path.SEPARATOR + candidateName
   }
 
   private def getTierFromPath(path: String): Tier = {
@@ -184,16 +194,14 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
-      if (operationMode != Mode.MANUAL_WRITE) {
-        val message: String = "Reserve API is not allowed for mode %s".format(operationMode)
-        logger.warn(message)
-        return Future.failed(new RuntimeException(message))
-      }
       val candidate: Candidate = Candidate.fromJSON(request.candidate)
       val reservedSize: Long = candidate.sizeInfo.get.writeSize
       val tier: Tier = Tier(request.tier)
       val path = try {
-        getPath(candidate, tier)
+        if (operationMode == Mode.FULLY_AUTOMATIC || operationMode == Mode.MANUAL_EVICTION)
+          getPath(request.name, tier)
+        else
+          generatePath(request.name, tier)
       } catch {
         case e: Exception =>
           logger.warn(e.getMessage)
@@ -233,11 +241,6 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
-      if (operationMode != Mode.MANUAL_WRITE) {
-        val message: String = "Commit Reservation API is not allowed for mode %s".format(operationMode.id)
-        logger.warn(message)
-        return Future.failed(new RuntimeException(message))
-      }
       if (!names.contains(request.name)) {
         val message = "Candidate with name %s cannot be found.".format(request.name)
         logger.warn(message)
@@ -291,11 +294,6 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
-      if (operationMode != Mode.MANUAL_WRITE) {
-        val message: String = "Delete API is not allowed for mode %s".format(operationMode.id)
-        logger.warn(message)
-        return Future.failed(new RuntimeException(message))
-      }
       val name: String = request.name
       if (!names.contains(name)) {
         val message = "Candidate with name %s cannot be found.".format(name)
@@ -339,12 +337,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
-      if (operationMode != Mode.MANUAL_WRITE) {
-        val message: String = "Free API is not allowed for mode %s".format(operationMode.id)
-        logger.warn(message)
-        return Future.failed(new RuntimeException(message))
-      }
-      if (!markedForDeletion.contains(request.path)) {
+      if (!markedForDeletion(request.path)) {
         val message: String = "Release for path %s is ignored since it is not marked for deletion.".format(request.path)
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
