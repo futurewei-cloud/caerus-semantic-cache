@@ -25,7 +25,7 @@ case class BasicSizeEstimator() extends SizeEstimator {
 
   /**
    * Estimate and update read and write sizes for specific candidate. The prediction is based on spark estimation
-   * predicitions and some simple hypothesis made for the read sizes.
+   * predictions and some simple hypothesis made for the read sizes.
    *
    * @param candidate Candidate to estimate and update sizes for.
    */

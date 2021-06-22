@@ -1,12 +1,18 @@
 package org.openinfralabs.caerus.cache.examples.spark
 
+
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+import org.apache.spark.sql.execution.QueryExecution
+import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
 import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SizeEstimator}
-import org.openinfralabs.caerus.cache.common.Candidate
+import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, Repartitioning, Tier}
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.examples.spark.gridpocket.{GridPocketSchemaProvider, GridPocketTrace}
+
+import java.io.{BufferedWriter, FileWriter}
 
 object SizeEstimatorEvaluator {
   private def getSupportedPlans(plan: LogicalPlan, supportTree: Support[Boolean]): Seq[LogicalPlan] = {
@@ -23,21 +29,23 @@ object SizeEstimatorEvaluator {
 
   def main(args: Array[ String ]) {
     // Take arguments.
-    if (args.length != 6) {
-      System.exit(0)
+    if (args.length != 7) {
+      Console.out.println("arg length should be 7")
+      //System.exit(0)
     }
     val sparkURI: String = args(0)
     val semanticCacheURI: String = args(1)
     val year: Int = args(2).toInt
     val inputPath: String = args(3)
-    val outputPath: String = args(4)
-    val resultsPath: String = args(5)
+    val resultsPath: String = args(4)
+    val historyPath: String = args(5)
+    val outputPath: String = args(6)
 
     // Initiate spark session.
     val spark: SparkSession =
       SparkSession.builder()
         .master(sparkURI)
-        .appName(name = "GridPocketTrace")
+        .appName(name = "SizeEstimatorEvaluator")
         .getOrCreate()
 
     // Create trace.
@@ -49,16 +57,47 @@ object SizeEstimatorEvaluator {
     val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.optimizedPlan)
     val supportedPlans: Seq[LogicalPlan] = logicalPlans.flatMap(plan => getSupportedPlans(plan))
     val plans: Seq[CaerusPlan] = supportedPlans.map(plan => SemanticCache.transform(plan))
-    val candidates: Seq[Candidate] = plans.flatMap(candidateSelector.getCandidates)
-    Console.out.println("Candidates:\n%s".format(candidates.mkString("\n")))
+    val candidates: Seq[Candidate] =
+      plans.flatMap(candidateSelector.getCandidates).filter(candidate => !candidate.isInstanceOf[Caching])
+    Console.out.println("Number of Candidates:\n%s".format(candidates.length))
 
     // Calculate the estimates for all the candidates.
     val sizeEstimator: SizeEstimator = BasicSizeEstimator()
-
+    for (candidate <- candidates) {
+      sizeEstimator.estimateSize(candidate)
+    }
     // Run the candidates by using semantic cache api.
-    // Use metrics from History server to collect actual results (see Metrics).
+    if (semanticCacheURI == "none") {
+      Console.err.println("Semantic Cache URI should be defined.")
+      System.exit(-1)
+    }
+    val semanticCache: SemanticCache = new SemanticCache(spark, semanticCacheURI)
+
+
     // Output: candidate No, write size, estimated write size, read size, estimated read size (min "2019-01-01 00:00:00, max "2019-02-01 00:00:00)
+    val schema: StructType = new GridPocketSchemaProvider().getSchema
+    val loadDF: DataFrame = spark.read.option("header","true").schema(schema).csv(inputPath)
+    for (candidate <- candidates) {
+      // val estimatedWriteSize, estimatedReadInfo = candidate.sizeInfo
+      Console.out.println("Running candidate: %s".format(candidate))
+      candidate match {
+        case Repartitioning(_, index, _) =>
+          semanticCache.repartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, "temp")
+        case FileSkippingIndexing(_, index, _) =>
+          semanticCache.fileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, "temp")
+        case Caching(plan, _) =>
+      }
+      loadDF
+        .filter(col("date") < "%04d-02-01 00:00:00".format(year) &&
+          col("date") >= "%04d-01-01 00:00:00".format(year))
+        .write.mode("overwrite").option("header", "true").csv(outputPath)
+      semanticCache.delete("temp")
+    }
 
+    // Write results
+    val applicationId = spark.sparkContext.applicationId +".inprogress"
+    Metrics.getMetrics(spark, historyPath, applicationId, resultsPath)
 
+    spark.stop()
   }
 }
