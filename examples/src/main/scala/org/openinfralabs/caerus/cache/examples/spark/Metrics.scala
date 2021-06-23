@@ -122,8 +122,8 @@ object Metrics {
           curQuery+1,
           execTime,
           (cpuTime/1000000).toLong,
-          (readSize/1000000).toLong,
-          (writeSize/1000000).toLong
+          readSize.toLong,
+          writeSize.toLong
         )
         curQuery += 1
         execTime = 0

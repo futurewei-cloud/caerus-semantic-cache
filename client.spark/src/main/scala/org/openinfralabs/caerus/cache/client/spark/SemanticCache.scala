@@ -617,6 +617,8 @@ class SemanticCache(
       case e: Exception =>
         logger.warn("Cannot write candidate %s. Exception message:\n%s\n".format(candidate, e.getMessage))
         true
+    } finally {
+      applyOptimization = false
     }
     if (triggeredException) {
       try {
