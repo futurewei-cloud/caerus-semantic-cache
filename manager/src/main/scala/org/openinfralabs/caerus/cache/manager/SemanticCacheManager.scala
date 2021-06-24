@@ -93,6 +93,12 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val futurePlans: Seq[ CaerusPlan ] = source.getLines().map(CaerusPlan.fromJSON).toSeq
       logger.debug("Future Plans:\n%s".format(futurePlans.mkString("\n")))
       OraclePredictor(futurePlans)
+
+    case "reverseorder" =>
+      val limit: Int = conf.getInt(predictorConfStr + ".limit")
+      var futurePlans: Seq[CaerusPlan] = Seq.empty[CaerusPlan]
+      logger.info("Reverse order predictor with limit : %s".format(limit))
+      ReverseOrderPredictor(futurePlans, limit)
   }
   private val outputPath: String = {
     if (tiers.contains(Tier.STORAGE_DISK))

@@ -1,10 +1,6 @@
 caches {
-    compute-memory {
-        site = "alluxio://localhost:19998/tmp/cache"
-        size = 4G
-    }
     storage-disk {
-        site = "hdfs://localhost:9000/tmp/cache"
+        site = "hdfs://NameNode:8020/tmp/cache"
         size = 256G
     }
 }
@@ -14,5 +10,5 @@ server {
 }
 predictor {
     type = "oracle"
-    file = "trace-file.txt"
+    file = "/home/jitg/printpath/print.csv"
 }
