@@ -9,7 +9,7 @@ service SemanticCacheService {
   // Semantic Cache Administrator API. Commit reservation RPC.
   rpc commitReservation (CommitReservationRequest) returns (Ack) {}
   // Semantic Cache Administrator API. Deletion RPC.
-  rpc delete (DeleteRequest) returns (PathReply) {}
+  rpc delete (DeleteRequest) returns (DeleteReply) {}
   // Semantic Cache Administrator API. Commit deletion RPC.
   rpc free (FreeRequest) returns (Ack) {}
 
@@ -51,6 +51,11 @@ message FreeRequest {
 
 message PathReply {
   string path = 1;
+}
+
+message DeleteReply {
+  string path = 1;
+  string format = 2;
 }
 
 message RegisterRequest {

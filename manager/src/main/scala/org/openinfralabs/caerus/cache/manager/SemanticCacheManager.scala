@@ -273,9 +273,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           request.realSize,
           capacity(tier) + reservedSize - request.realSize
         ))
-        contents.put(candidate,path)
+        val newSizeInfo: SizeInfo = SizeInfo(request.realSize, candidate.sizeInfo.get.readSizeInfo)
+        val newCandidate: Candidate = candidate.withNewSizeInfo(newSizeInfo)
+        names(request.name) = newCandidate
+        contents.put(newCandidate,path)
         reverseReferences(path) = Set.empty[String]
-        candidate.sizeInfo.get.writeSize = request.realSize
         logger.info("Updated Contents: %s\n".format(contents))
       } else {
         logger.info("Cancel candidate:\n%s\nReserved size: %s\tCorrected Capacity: %s.".format(
@@ -293,7 +295,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     /**
      * Semantic Cache Administrator API. Deletion RPC.
      */
-    override def delete(request: DeleteRequest): Future[PathReply] = {
+    override def delete(request: DeleteRequest): Future[DeleteReply] = {
       if (!registeredClients.contains(request.clientId)) {
         val message: String = "Client %s is not registered.".format(request.clientId)
         logger.warn(message)
@@ -307,6 +309,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       val candidate: Candidate = names(name)
+      val format: String = candidate match {
+        case _: Repartitioning | _: Caching => "parquet"
+        case _: FileSkippingIndexing => "json"
+      }
       if (!contents.contains(candidate)) {
         val message = "Submission is ignored since there is no content for the following candidate:\n%s"
           .format(candidate.toString)
@@ -330,7 +336,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       logger.info("Reverse References: %s".format(reverseReferences))
       contents.remove(candidate)
       logger.info("Updated Contents: %s\n".format(contents))
-      Future.successful(PathReply(path))
+      Future.successful(DeleteReply(path, format))
     }
 
     /**

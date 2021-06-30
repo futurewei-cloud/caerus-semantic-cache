@@ -4,10 +4,13 @@ import org.openinfralabs.caerus.cache.common.plans.{CaerusPlan, CaerusSourceLoad
 
 abstract class Candidate(var sizeInfo: Option[SizeInfo]) {
   def toString: String
+
   def toJSON: String = {
     val caerusPlanSerDe: CaerusPlanSerDe = new CaerusPlanSerDe
     caerusPlanSerDe.serializeCandidate(this)
   }
+
+  def withNewSizeInfo(newSizeInfo: SizeInfo): Candidate
 }
 
 object Candidate {
@@ -23,9 +26,15 @@ case class Repartitioning(source: CaerusSourceLoad, index: Int, repSizeInfo: Opt
 
   def canEqual(other: Any): Boolean = other.isInstanceOf[Repartitioning]
 
-  override def equals(other: Any): Boolean = other match {
-    case Repartitioning(otherSource, otherIndex, _) => source == otherSource && otherIndex == index
-    case _ => false
+  override def equals(other: Any): Boolean = {
+    other match {
+      case Repartitioning(otherSource, otherIndex, _) => source == otherSource && otherIndex == index
+      case _ => false
+    }
+  }
+
+  override def withNewSizeInfo(newSizeInfo: SizeInfo): Candidate = {
+    Repartitioning(source, index, Some(newSizeInfo))
   }
 }
 
@@ -39,6 +48,10 @@ case class FileSkippingIndexing(source: CaerusSourceLoad, index: Int, fsSizeInfo
     case FileSkippingIndexing(otherSource, otherIndex, _) => source == otherSource && otherIndex == index
     case _ => false
   }
+
+  override def withNewSizeInfo(newSizeInfo: SizeInfo): Candidate = {
+    FileSkippingIndexing(source, index, Some(newSizeInfo))
+  }
 }
 
 case class Caching(plan: CaerusPlan, cachingSizeInfo: Option[SizeInfo] = None) extends Candidate(cachingSizeInfo) {
@@ -49,5 +62,9 @@ case class Caching(plan: CaerusPlan, cachingSizeInfo: Option[SizeInfo] = None) e
   override def equals(other: Any): Boolean = other match {
     case Caching(otherPlan, _) => plan.sameResult(otherPlan)
     case _ => false
+  }
+
+  override def withNewSizeInfo(newSizeInfo: SizeInfo): Candidate = {
+    Caching(plan, Some(newSizeInfo))
   }
 }

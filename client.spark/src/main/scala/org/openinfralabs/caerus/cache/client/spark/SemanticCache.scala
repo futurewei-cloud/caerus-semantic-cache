@@ -695,10 +695,10 @@ class SemanticCache(
     }
 
     // Send delete request and get path to delete.
-    val path: String = try {
+    val deleteReply: DeleteReply = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
       val request: DeleteRequest = DeleteRequest(clientId, name)
-      stub.delete(request).path
+      stub.delete(request)
     } catch {
       case e: Exception =>
         logger.warn("Delete failed: %s".format(e.getMessage))
@@ -706,25 +706,25 @@ class SemanticCache(
     }
 
     // Find freed space.
-    val deleteDF: DataFrame = spark.read.parquet(path)
+    val deleteDF: DataFrame = spark.read.format(deleteReply.format).load(deleteReply.path)
     val freedSize: Long = deleteDF.queryExecution.analyzed.stats.sizeInBytes.toLong
 
     // Delete actual content.
     val config: Configuration = new Configuration()
-    val pathToDelete = new Path(path)
+    val pathToDelete = new Path(deleteReply.path)
     val fs: FileSystem = pathToDelete.getFileSystem(config)
     try {
       fs.delete(pathToDelete, true)
     } catch {
       case e: Exception =>
-        logger.warn("Cannot delete file %s. Exception message: %s".format(path, e.getMessage))
+        logger.warn("Cannot delete file %s. Exception message: %s".format(deleteReply.path, e.getMessage))
         return 0L
     }
 
     // Reply with space freed.
     try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
-      val request: FreeRequest = FreeRequest(clientId, path, freedSize)
+      val request: FreeRequest = FreeRequest(clientId, deleteReply.path, freedSize)
       stub.free(request)
     } catch {
       case e: Exception =>

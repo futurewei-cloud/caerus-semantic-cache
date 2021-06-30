@@ -1,18 +1,15 @@
 package org.openinfralabs.caerus.cache.examples.spark
 
-
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.execution.QueryExecution
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
 import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SizeEstimator}
-import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, Repartitioning, Tier}
+import org.openinfralabs.caerus.cache.common._
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.examples.spark.gridpocket.{GridPocketSchemaProvider, GridPocketTrace}
 
-import java.io.{BufferedWriter, FileWriter}
 import scala.collection.mutable.ArrayBuffer
 import scala.io.Source._
 
@@ -79,31 +76,36 @@ object SizeEstimatorEvaluator {
     // Output: candidate No, write size, estimated write size, read size, estimated read size (min "2019-01-01 00:00:00, max "2019-02-01 00:00:00)
     val schema: StructType = new GridPocketSchemaProvider().getSchema
     val loadDF: DataFrame = spark.read.option("header", "true").schema(schema).csv(inputPath)
-    for (candidate <- candidates) {
+    candidates.zipWithIndex.foreach(elem => {
+      val candidate: Candidate = elem._1
+      val tempName: String = "temp-%d".format(elem._2)
       Console.out.println("Running candidate: %s".format(candidate))
       candidate match {
         case Repartitioning(_, index, _) =>
-          semanticCache.repartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, "temp")
+          semanticCache.repartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case FileSkippingIndexing(_, index, _) =>
-          semanticCache.fileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, "temp")
-        case Caching(plan, _) =>
+          semanticCache.fileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
+        case Caching(_, _) =>
       }
+      Console.out.println(semanticCache.status)
       loadDF
         .filter(col("date") < "%04d-02-01 00:00:00".format(year) &&
           col("date") >= "%04d-01-01 00:00:00".format(year))
         .write.mode("overwrite").option("header", "true").csv(outputPath)
-      semanticCache.delete("temp")
-    }
+      semanticCache.delete(tempName)
+    })
 
     // Write results
     val applicationId = spark.sparkContext.applicationId
     spark.stop
+
     // Initiate spark session for getting results.
     val sparkMetrics: SparkSession =
       SparkSession.builder()
         .master(sparkURI)
         .appName(name = "SizeEstimatorEvaluatorMetrics")
         .getOrCreate()
+
     // Write results and stop spark session.
     Metrics.getMetrics(sparkMetrics, historyPath, applicationId, resultsPath)
     sparkMetrics.stop
