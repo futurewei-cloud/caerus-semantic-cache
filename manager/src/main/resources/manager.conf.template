@@ -1,6 +1,6 @@
 caches {
     storage-disk {
-        site = "hdfs://NameNode:8020/tmp/cache"
+        site = "hdfs://localhost:9000/tmp/cache"
         size = 256G
     }
 }
@@ -10,5 +10,6 @@ server {
 }
 predictor {
     type = "oracle"
-    file = "/home/jitg/printpath/print.csv"
+    file = "futurePlans.json"
+    windowSize = ""
 }
