@@ -119,7 +119,15 @@ object SizeEstimatorEvaluator {
 
     for (candidate <- candidates) {
       val Array(estimatedWrite,estimatedReadInfo) = candidate.sizeInfo.toString.split(",")
-      Console.out.println(estimatedWrite,result(0)(4),estimatedReadInfo,result(1)(3))
+      candidate match {
+        case Repartitioning(_,_,_) =>
+          Console.out.println("EstimatedWrite: %s, ActualWrite: %s, EstimatedRead: %s, ActualRead: %s".format(estimatedWrite,result(0)(4),estimatedReadInfo,result(1)(3)))
+        case FileSkippingIndexing(_,_,_) =>
+          Console.out.println("EstimatedWrite: %s, ActualWrite: %s, EstimatedRead: %s, ActualRead: %s".format(estimatedWrite,result(2)(4),estimatedReadInfo,result(3)(3)))
+        case Caching(_, _) =>
+      }
+
+
     }
 
 
