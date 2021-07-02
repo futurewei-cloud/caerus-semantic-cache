@@ -86,19 +86,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
   private val optimizer: Optimizer = UnifiedOptimizer()
   private val predictorConfStr: String = "predictor"
+  private val windowSize: Int = conf.getInt(predictorConfStr + ".windowSize")
   private val predictor: Predictor = conf.getString(predictorConfStr + ".type") match {
     case "oracle" =>
       val filename: String = conf.getString(predictorConfStr + ".file")
       val source = Source.fromFile(filename)
-      val futurePlans: Seq[ CaerusPlan ] = source.getLines().map(CaerusPlan.fromJSON).toSeq
+      val futurePlans: Seq[CaerusPlan] = source.getLines().map(CaerusPlan.fromJSON).toSeq
       logger.debug("Future Plans:\n%s".format(futurePlans.mkString("\n")))
-      OraclePredictor(futurePlans)
-
+      OraclePredictor(futurePlans, windowSize)
     case "reverseorder" =>
-      val limit: Int = conf.getInt(predictorConfStr + ".limit")
-      var futurePlans: Seq[CaerusPlan] = Seq.empty[CaerusPlan]
-      logger.info("Reverse order predictor with limit : %s".format(limit))
-      ReverseOrderPredictor(futurePlans, limit)
+      logger.info("Reverse order predictor with limit : %s".format(windowSize))
+      ReverseOrderPredictor(windowSize)
   }
   private val outputPath: String = {
     if (tiers.contains(Tier.STORAGE_DISK))

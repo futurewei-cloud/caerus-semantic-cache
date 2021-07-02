@@ -3,7 +3,8 @@ package org.openinfralabs.caerus.cache.manager
 import com.typesafe.scalalogging.LazyLogging
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 
-case class OraclePredictor(var futurePlans: Seq[CaerusPlan]) extends Predictor with LazyLogging {
+case class OraclePredictor(var futurePlans: Seq[CaerusPlan], windowSize: Int)
+  extends Predictor(windowSize) with LazyLogging {
   override def getPredictions(caerusPlan: CaerusPlan): Seq[CaerusPlan] = {
     if (futurePlans.isEmpty) {
       logger.warn("Oracle predictions are empty.")
@@ -15,7 +16,7 @@ case class OraclePredictor(var futurePlans: Seq[CaerusPlan]) extends Predictor w
         )
       }
       futurePlans = futurePlans.tail
-      futurePlans
+      futurePlans.take(windowSize)
     }
   }
 }
