@@ -39,6 +39,10 @@ class SemanticCache(
   private var skip: Boolean = false
   private val sizeEstimator: SizeEstimator = BasicSizeEstimator()
   private val candidateSelector: CandidateSelector = BasicCandidateSelector()
+  private var fullOptimizeTime: Long = 0
+  private var serializeDeserializeTime: Long = 0
+  private var transformTime: Long = 0
+  private var writeTime: Long = 0
 
   // Activate optimization for spark session.
   logger.info("Activate Semantic Cache optimization.")
@@ -303,8 +307,12 @@ class SemanticCache(
     if (supportTree.support && checkAccessNode(inputPlan)) {
       // Transform native Spark's LogicalPlan to CaerusPlan and serialize CaerusPlan.
       logger.info("Initial Logical Plan:\n%s".format(inputPlan))
+      val beginTime1: Long = System.nanoTime()
       val inputCaerusPlan: CaerusPlan = transform(inputPlan)
+      val endTime1: Long = System.nanoTime()
+      transformTime += endTime1 - beginTime1
       logger.info("Initial Caerus Plan:\n%s".format(inputCaerusPlan))
+      val beginTime2: Long = System.nanoTime()
       val inputSerializedCaerusPlan: String = inputCaerusPlan.toJSON
       logger.info("Initial Serialized Caerus Plan: %s\n".format(inputSerializedCaerusPlan))
       val candidates: Seq[Candidate] = {
@@ -315,6 +323,8 @@ class SemanticCache(
       }
       candidates.foreach(sizeEstimator.estimateSize)
       val jsonCandidates: Seq[String] = candidates.map(_.toJSON)
+      val endTime2: Long = System.nanoTime()
+      serializeDeserializeTime += endTime2 - beginTime2
       logger.info("JSON Candidates:\n%s".format(jsonCandidates.mkString("\n")))
 
       // Make optimization request to Semantic Cache Manager.
@@ -331,9 +341,15 @@ class SemanticCache(
 
       // Deserialize CaerusPlan and transform it back to native Spark's LogicalPlan.
       logger.info("Output Serialized Caerus Plan: %s\n".format(outputSerializedCaerusPlan))
+      val beginTime3: Long = System.nanoTime()
       val outputCaerusPlan: CaerusPlan = CaerusPlan.fromJSON(outputSerializedCaerusPlan)
+      val endTime3: Long = System.nanoTime()
+      serializeDeserializeTime += endTime3 - beginTime3
       logger.info("Output Caerus Plan:\n%s".format(outputCaerusPlan))
+      val beginTime4: Long = System.nanoTime()
       val outputPlan: LogicalPlan = pullUpUnion(transformBack(outputCaerusPlan, inputPlan, inputCaerusPlan))
+      val endTime4: Long = System.nanoTime()
+      transformTime += endTime4 - beginTime4
       logger.info("Output Logical Plan:\n%s".format(outputPlan))
       outputPlan
     } else {
@@ -347,10 +363,13 @@ class SemanticCache(
    * Terminate heartbeat sender when application ends.
    */
   override def onApplicationEnd(applicationEnd: SparkListenerApplicationEnd): Unit = {
+    logger.info("Breakdown: %s,%s,%s,%s".format(fullOptimizeTime, serializeDeserializeTime, transformTime, writeTime))
     heartbeatThread.interrupt()
   }
 
   private def startRepartitioning(loadDF: DataFrame, partitionAttribute: String, tier: Tier, name: String): Long = {
+    val beginTime: Long = System.nanoTime()
+
     // Make runtime checks, to ensure support.
     val logicalPlan: LogicalPlan = loadDF.queryExecution.logical
     if (!logicalPlan.isInstanceOf[LogicalRelation]) {
@@ -429,6 +448,8 @@ class SemanticCache(
         logger.warn("Commit reservation failed: %s".format(e.getMessage))
         return 0L
     }
+    val endTime: Long = System.nanoTime()
+    writeTime += endTime - beginTime
     outputSize
   }
 
@@ -456,6 +477,8 @@ class SemanticCache(
   }
 
   private def startFileSkippingIndexing(loadDF: DataFrame, indexedAttribute: String, tier: Tier, name: String): Long = {
+    val beginTime: Long = System.nanoTime()
+
     // Transform load DataFrame to CaerusLoad.
     val logicalPlan: LogicalPlan = loadDF.queryExecution.logical
     if (!logicalPlan.isInstanceOf[LogicalRelation]) {
@@ -552,6 +575,8 @@ class SemanticCache(
         logger.warn("Commit reservation failed: %s".format(e.getMessage))
         return 0L
     }
+    val endTime: Long = System.nanoTime()
+    writeTime += endTime - beginTime
     outputSize
   }
 
@@ -578,6 +603,8 @@ class SemanticCache(
   }
 
   private def startCacheIntermediateData(logicalPlan: LogicalPlan, tier: Tier, name: String): Long = {
+    val beginTime: Long = System.nanoTime()
+
     // Transform logical plan to CaerusPlan.
     val caerusPlan = transform(logicalPlan)
     val candidate: Caching = Caching(caerusPlan)
@@ -646,6 +673,8 @@ class SemanticCache(
         logger.warn("Commit reservation failed: %s".format(e.getMessage))
         return 0L
     }
+    val endTime: Long = System.nanoTime()
+    writeTime += endTime - beginTime
     outputSize
   }
 
@@ -688,6 +717,8 @@ class SemanticCache(
    * @since 0.0.0
    */
   def delete(name: String): Long = {
+    val beginTime: Long = System.nanoTime()
+
     // See if mode allows this operation.
     if (mode != Mode.MANUAL_WRITE) {
       logger.warn("Delete not allowed for mode %s. Ignoring request.".format(mode))
@@ -731,6 +762,8 @@ class SemanticCache(
         logger.warn("Free failed: %s".format(e.getMessage))
         return 0L
     }
+    val endTime: Long = System.nanoTime()
+    writeTime += endTime - beginTime
     freedSize
   }
 
@@ -739,7 +772,8 @@ class SemanticCache(
    */
   object Optimization extends Rule[LogicalPlan] {
     def apply(inputPlan: LogicalPlan): LogicalPlan = {
-      if (mode == Mode.NO_CACHE) {
+      val beginTime: Long = System.nanoTime()
+      val outputPlan: LogicalPlan = if (mode == Mode.NO_CACHE) {
         inputPlan
       } else if (applyOptimization && !skip) {
         logger.info("Initial Spark's Logical Plan:\n%s".format(inputPlan))
@@ -756,6 +790,9 @@ class SemanticCache(
         skip = false
         inputPlan
       }
+      val endTime: Long = System.nanoTime()
+      fullOptimizeTime += endTime - beginTime
+      outputPlan
     }
   }
 
