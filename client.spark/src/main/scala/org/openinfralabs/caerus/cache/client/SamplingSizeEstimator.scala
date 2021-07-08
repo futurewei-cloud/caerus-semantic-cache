@@ -1,6 +1,12 @@
 package org.openinfralabs.caerus.cache.client
 
-import org.openinfralabs.caerus.cache.common.Candidate
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
+import org.openinfralabs.caerus.cache.common.plans.{CaerusPlan, CaerusSourceLoad}
+import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, Repartitioning}
 
 /**
  * Size estimator for Spark's Semantic Cache Client. SamplingSizeEstimator should create relatively small samples based
@@ -27,11 +33,47 @@ import org.openinfralabs.caerus.cache.common.Candidate
  *
  * For caching, the SamplingSizeEstimator should return the same value as the writeSizeInfo no matter what is the query.
  */
-class SamplingSizeEstimator(private val ratio: Float) extends SizeEstimator {
+class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends SizeEstimator {
+  private def detectSources(inputPlan: LogicalPlan, plan: CaerusPlan): Seq[RDD[InternalRow]] = {
+    plan match {
+      case caerusSourceLoad: CaerusSourceLoad =>
+        assert(inputPlan.isInstanceOf[LogicalRelation])
+        val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
+        assert(logicalRelation.relation.isInstanceOf[HadoopFsRelation])
+        val hadoopFsRelation = logicalRelation.relation.asInstanceOf[HadoopFsRelation]
+        val loadDF: DataFrame = spark.read
+          .format(caerusSourceLoad.format)
+          .options(hadoopFsRelation.options)
+          .schema(hadoopFsRelation.dataSchema)
+          .load(caerusSourceLoad.sources.map(source => source.path):_*)
+        Seq(loadDF.queryExecution.toRdd)
+      case _ =>
+        plan.children.indices.flatMap(i => detectSources(inputPlan.children(i), plan.children(i)))
+    }
+  }
+
   /**
    * Estimate and update read and write sizes for specific candidate.
    *
    * @param candidate Candidate to estimate and updates sizes for.
    */
-  override def estimateSize(candidate: Candidate): Unit = ???
+  override def estimateSize(inputPlan: LogicalPlan, candidate: Candidate): Unit = {
+    candidate match {
+      case Repartitioning(caerusSourceLoad, _, _) =>
+        assert(inputPlan.isInstanceOf[LogicalRelation])
+        val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
+        assert(logicalRelation.relation.isInstanceOf[HadoopFsRelation])
+        val hadoopFsRelation = logicalRelation.relation.asInstanceOf[HadoopFsRelation]
+        val loadDF: DataFrame = spark.read
+          .format(caerusSourceLoad.format)
+          .options(hadoopFsRelation.options)
+          .schema(hadoopFsRelation.dataSchema)
+          .load(caerusSourceLoad.sources.map(source => source.path):_*)
+        val rdd: RDD[InternalRow] = loadDF.queryExecution.toRdd
+      case FileSkippingIndexing(caerusSourceLoad, _, _) =>
+      case Caching(plan, cachingSizeInfo) =>
+        detectSources(inputPlan, plan)
+
+    }
+  }
 }

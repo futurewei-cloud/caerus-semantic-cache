@@ -399,7 +399,7 @@ class SemanticCache(
 
     // Make reservation request.
     val candidate: Repartitioning = Repartitioning(caerusSourceLoad, index)
-    sizeEstimator.estimateSize(candidate)
+    sizeEstimator.estimateSize(logicalPlan, candidate)
     val path: String = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
       val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, tier.id, name)

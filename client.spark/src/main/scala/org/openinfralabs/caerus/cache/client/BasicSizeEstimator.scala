@@ -1,6 +1,6 @@
 package org.openinfralabs.caerus.cache.client
 
-import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, LogicalPlan}
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.common.{BasicReadSizeInfo, Caching, Candidate, FileSkippingIndexing, ReadSizeInfo, Repartitioning, SizeInfo}
 
@@ -29,7 +29,7 @@ case class BasicSizeEstimator() extends SizeEstimator {
    *
    * @param candidate Candidate to estimate and update sizes for.
    */
-  override def estimateSize(candidate: Candidate): Unit = {
+  override def estimateSize(inputPlan: LogicalPlan, candidate: Candidate): Unit = {
     candidate match {
       case repartitioning: Repartitioning =>
         sourceSize = repartitioning.source.size
