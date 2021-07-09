@@ -315,14 +315,14 @@ class SemanticCache(
       val beginTime2: Long = System.nanoTime()
       val inputSerializedCaerusPlan: String = inputCaerusPlan.toJSON
       logger.info("Initial Serialized Caerus Plan: %s\n".format(inputSerializedCaerusPlan))
-      val candidates: Seq[Candidate] = {
+      val candidatePairs: Seq[(LogicalPlan, Candidate)] = {
         if (mode == Mode.FULLY_AUTOMATIC)
-          candidateSelector.getCandidates(inputCaerusPlan)
+          candidateSelector.getCandidates(inputPlan, inputCaerusPlan)
         else
-          Seq.empty[Candidate]
+          Seq.empty[(LogicalPlan, Candidate)]
       }
-      candidates.foreach(sizeEstimator.estimateSize)
-      val jsonCandidates: Seq[String] = candidates.map(_.toJSON)
+      candidatePairs.foreach(candidatePair => sizeEstimator.estimateSize(candidatePair._1, candidatePair._2))
+      val jsonCandidates: Seq[String] = candidatePairs.map(_._2.toJSON)
       val endTime2: Long = System.nanoTime()
       serializeDeserializeTime += endTime2 - beginTime2
       logger.info("JSON Candidates:\n%s".format(jsonCandidates.mkString("\n")))
@@ -511,7 +511,7 @@ class SemanticCache(
 
     // Make reservation request.
     val candidate: FileSkippingIndexing = FileSkippingIndexing(caerusSourceLoad, index)
-    sizeEstimator.estimateSize(candidate)
+    sizeEstimator.estimateSize(logicalPlan, candidate)
     val path: String = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)
       val request: ReservationRequest = ReservationRequest(clientId, candidate.toJSON, tier.id, name)
@@ -608,7 +608,7 @@ class SemanticCache(
     // Transform logical plan to CaerusPlan.
     val caerusPlan = transform(logicalPlan)
     val candidate: Caching = Caching(caerusPlan)
-    sizeEstimator.estimateSize(candidate)
+    sizeEstimator.estimateSize(logicalPlan, candidate)
     logger.debug("JSON Candidate:\n%s".format(candidate.toJSON))
     val path: String = try {
       val stub = SemanticCacheServiceGrpc.blockingStub(channel)

@@ -56,14 +56,16 @@ object SizeEstimatorEvaluator {
     val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.optimizedPlan)
     val supportedPlans: Seq[LogicalPlan] = logicalPlans.flatMap(plan => getSupportedPlans(plan))
     val plans: Seq[CaerusPlan] = supportedPlans.map(plan => SemanticCache.transform(plan))
-    val candidates: Seq[Candidate] =
-      plans.flatMap(candidateSelector.getCandidates).distinct.filter(candidate => !candidate.isInstanceOf[Caching])
-    Console.out.println("Number of Candidates:\n%s".format(candidates.length))
+    val candidatePairs: Seq[(LogicalPlan,Candidate)] =
+      plans.indices
+        .flatMap(i => candidateSelector.getCandidates(supportedPlans(i), plans(i)))
+        .distinct
+    Console.out.println("Number of Candidates:\n%s".format(candidatePairs.length))
 
     // Calculate the estimates for all the candidates.
     val sizeEstimator: SizeEstimator = BasicSizeEstimator()
-    for (candidate <- candidates) {
-      sizeEstimator.estimateSize(candidate)
+    for ((inputPlan,candidate) <- candidatePairs) {
+      sizeEstimator.estimateSize(inputPlan,candidate)
     }
     // Run the candidates by using semantic cache api.
     if (semanticCacheURI == "none") {
@@ -76,8 +78,8 @@ object SizeEstimatorEvaluator {
     // Output: candidate No, write size, estimated write size, read size, estimated read size (min "2019-01-01 00:00:00, max "2019-02-01 00:00:00)
     val schema: StructType = new GridPocketSchemaProvider().getSchema
     val loadDF: DataFrame = spark.read.option("header", "true").schema(schema).csv(inputPath)
-    candidates.zipWithIndex.foreach(elem => {
-      val candidate: Candidate = elem._1
+    candidatePairs.zipWithIndex.foreach(elem => {
+      val candidate: Candidate = elem._1._2
       val tempName: String = "temp-%d".format(elem._2)
       Console.out.println("Running candidate: %s".format(candidate))
       candidate match {
@@ -117,7 +119,7 @@ object SizeEstimatorEvaluator {
     }
     bufferedSource.close()
 
-    for (candidate <- candidates) {
+    for ((_,candidate) <- candidatePairs) {
       val Array(estimatedWrite,estimatedReadInfo) = candidate.sizeInfo.toString.split(",")
       candidate match {
         case Repartitioning(_,_,_) =>
@@ -126,15 +128,7 @@ object SizeEstimatorEvaluator {
           Console.out.println("EstimatedWrite: %s, ActualWrite: %s, EstimatedRead: %s, ActualRead: %s".format(estimatedWrite,result(2)(4),estimatedReadInfo,result(3)(3)))
         case Caching(_, _) =>
       }
-
-
     }
-
-
-
-
-
-
   }
 }
 
