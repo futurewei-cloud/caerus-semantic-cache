@@ -10,7 +10,7 @@ import org.slf4j.{Logger, LoggerFactory}
 import scala.annotation.tailrec
 import scala.collection.mutable
 
-case class UnifiedOptimizer() extends Optimizer {
+case class UnifiedOptimizer(planner: String) extends Optimizer {
   type DataTransform = Option[(Set[Set[Expression]], Seq[Int], Option[CaerusPlan], Seq[CaerusPlan])]
 
   private final val logger: Logger = LoggerFactory.getLogger(this.getClass)
@@ -167,7 +167,8 @@ case class UnifiedOptimizer() extends Optimizer {
     logger.info("Lookup for repartitions for indices %s with the same records as:\n%s"
       .format(indices.mkString(","), source))
     val equalSourcePaths: Seq[(String,Seq[SourceInfo])] = contents.keys.flatMap(candidate => {
-      LRCPlanner.addReference(candidate)
+      if(planner == "lrc")
+        LRCPlanner.addReference(candidate)
       candidate match {
         case Repartitioning(repartitionedSource, partitionIndex, _)
           if indices.contains(partitionIndex) && repartitionedSource == source =>
@@ -182,7 +183,8 @@ case class UnifiedOptimizer() extends Optimizer {
     logger.info("Lookup for repartitions for indices %s with a subset of records as:\n%s"
       .format(indices.mkString(","), source))
     contents.keys.flatMap(candidate => {
-      LRCPlanner.addReference(candidate)
+      if(planner == "lrc")
+        LRCPlanner.addReference(candidate)
       candidate match {
         case Repartitioning(repartitionedSource, partitionIndex, _) if indices.contains(partitionIndex) =>
           val diff: Option[Seq[SourceInfo]] = repartitionedSource.subsetOf(source)
@@ -256,7 +258,8 @@ case class UnifiedOptimizer() extends Optimizer {
     logger.info("Lookup for file-skipping indexing for indices %s with similar records as:\n%s"
       .format(indices.mkString(","), source))
     contents.keys.flatMap(candidate => {
-      LRCPlanner.addReference(candidate)
+      if(planner == "lrc")
+        LRCPlanner.addReference(candidate)
       candidate match {
         case FileSkippingIndexing(indexedSource, index, _)
           if indices.contains(index) && indexedSource.canEqual(source) =>
@@ -434,7 +437,8 @@ case class UnifiedOptimizer() extends Optimizer {
     // Search for plans that are equal first.
     val res1: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap {
       case candidate@Caching(cachedPlan, _) if cachedPlan.sameResult(plan) =>{
-        LRCPlanner.addReference(candidate)
+        if(planner == "lrc")
+          LRCPlanner.addReference(candidate)
         val cacheLoad: CaerusCacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")
         Some(cacheLoad, None)}
       case _ =>
@@ -449,7 +453,8 @@ case class UnifiedOptimizer() extends Optimizer {
     val postOrderPlan = CaerusPlan.postOrder(plan)
     logger.info("Post-order plan:\n%s".format(postOrderPlan.mkString("\n")))
     val res2: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap(candidate =>{
-      LRCPlanner.addReference(candidate)
+      if(planner == "lrc")
+        LRCPlanner.addReference(candidate)
       candidate match {
       case Caching(cachedPlan, _) =>
         val cacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")

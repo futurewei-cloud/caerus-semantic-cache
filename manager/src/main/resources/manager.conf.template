@@ -8,6 +8,9 @@ server {
     port = 35001
     mode = 3
 }
+planner{
+    type = "basic"
+}
 predictor {
     type = "oracle"
     file = "futurePlans.json"

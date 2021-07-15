@@ -47,7 +47,6 @@ case class LRCPlanner(optimizer: Optimizer, predictor: Predictor, path: String) 
     logger.info("Initial candidates:\n%s\n".format(candidates.mkString("\n")))
     LRCPlanner.refCandidate = mutable.Map.empty[Candidate, Long]
     LRCPlanner.refPath = mutable.HashMap.empty[String, Long]
-    logger.info("Before adding candidates:\n%s\n".format(LRCPlanner.refCandidate.mkString("\n")))
     // For each candidate in candidates:
     // Add candidate in contents with name "temp".
     var newContents = contents
@@ -56,7 +55,6 @@ case class LRCPlanner(optimizer: Optimizer, predictor: Predictor, path: String) 
       newContents = newContents + ((candidate, "temp"))
     }
     )
-    logger.info("After adding candidates:\n%s\n".format(LRCPlanner.refCandidate.mkString("\n")))
     // Optimize plans in the future prediction (add the current one) adding one reference
     // to temp when necessary.
 
@@ -107,7 +105,6 @@ case class LRCPlanner(optimizer: Optimizer, predictor: Predictor, path: String) 
       newSize -= bottomCandidate.sizeInfo.get.writeSize
     }
     logger.info("New contents:\n%s".format(newContents.mkString("\n")))
-
     plan
   }
 }

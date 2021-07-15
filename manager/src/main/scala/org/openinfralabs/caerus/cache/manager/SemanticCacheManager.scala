@@ -78,14 +78,37 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       60000L
   }
 
+  private var plannerStr : String  = ""
+  private val optimizer: Optimizer ={
+    if (conf.hasPath("planner.type"))
+      {
+        if(conf.getString("planner.type") == "lrc") {
+          plannerStr = conf.getString("planner.type")
+        }
+        else if(conf.getString("planner.type") == "basic"){
+          plannerStr = conf.getString("planner.type")
+        }
+        else
+          {
+            logger.error("Planner type does not exist")
+          }
+        UnifiedOptimizer(plannerStr)
+      }
+    else
+      {
+        plannerStr = "basic"
+        UnifiedOptimizer("basic")
+      }
+  }
   private var pathId: Long = 0L
   private val names: mutable.HashMap[String, Candidate] = mutable.HashMap.empty[String, Candidate]
   private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
   private val reservations: mutable.HashMap[(String,Candidate),String] =
     mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
-  private val optimizer: Optimizer = UnifiedOptimizer()
+  //private val optimizer: Optimizer = UnifiedOptimizer()
   private val predictorConfStr: String = "predictor"
+
   private val windowSize: Int = conf.getInt(predictorConfStr + ".windowSize")
   private val predictor: Predictor = conf.getString(predictorConfStr + ".type") match {
     case "oracle" =>
@@ -104,7 +127,13 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     else
       "none"
   }
-  private val planner: Planner = LRCPlanner(optimizer, predictor, outputPath)
+  private val planner: Planner = {
+    if(plannerStr == "lrc")
+      LRCPlanner(optimizer, predictor, outputPath)
+    else
+      BasicStorageIOPlanner(optimizer, predictor, outputPath)
+  }
+  logger.info("%s planner initialized".format(plannerStr))
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
