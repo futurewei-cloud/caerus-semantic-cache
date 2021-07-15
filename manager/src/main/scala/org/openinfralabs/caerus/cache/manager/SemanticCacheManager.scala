@@ -104,7 +104,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     else
       "none"
   }
-  private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
+  private val planner: Planner = LRCPlanner(optimizer, predictor, outputPath)
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
