@@ -197,9 +197,13 @@ class SemanticCache(
             .map(row => row(0))
             .toSeq
             .asInstanceOf[Seq[String]]
-        logger.info("Filtered path: %s".format(filteredPath.mkString("[", ",", "]")))
+        logger.info("Filtered paths:")
+        for (path <- filteredPath)
+          logger.info(path)
         applyOptimization = true
-        logger.info("CaerusLoadWithIndices path: %s".format(caerusLoadWithIndices.path.mkString("[", ",", "]")))
+        logger.info("CaerusLoadWithIndices path:")
+        for (path <- caerusLoadWithIndices.path)
+          logger.info(path)
         val newPath: Seq[String] = caerusLoadWithIndices.path.intersect(filteredPath)
         logger.info("New path: %s".format(newPath.mkString("[", ",", "]")))
         val newSourceLoad: CaerusSourceLoad = CaerusSourceLoad(
@@ -882,8 +886,7 @@ object SemanticCache {
       case LogicalRelation(hadoopFsRelation: HadoopFsRelation, output, _, _) =>
         if (!hadoopFsRelation.fileFormat.isInstanceOf[DataSourceRegister]) {
           if (logger.isDefined)
-            logger.get.warn("Format provided for Data-Skipping Indices is not supported. Format: %s\n"
-              .format(hadoopFsRelation.fileFormat))
+            logger.get.warn("File format %s is not supported.\n".format(hadoopFsRelation.fileFormat))
           return plan
         }
         val inputFiles: Seq[FileStatus] = hadoopFsRelation.location.asInstanceOf[PartitioningAwareFileIndex].allFiles()
