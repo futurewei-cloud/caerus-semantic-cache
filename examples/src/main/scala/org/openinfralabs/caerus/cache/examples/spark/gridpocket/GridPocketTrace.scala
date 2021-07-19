@@ -1,5 +1,7 @@
 package org.openinfralabs.caerus.cache.examples.spark.gridpocket
 
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
@@ -65,6 +67,7 @@ object GridPocketTrace {
     val outputPath: String = args(4)
     val resultsPath: String = args(5)
     val printPath: String = args(6)
+    val validationPath: String = args(7)
 
     // Initiate spark session.
     val spark: SparkSession =
@@ -101,5 +104,22 @@ object GridPocketTrace {
     val out: BufferedWriter = new BufferedWriter(new FileWriter(resultsPath))
     results.foreach(result => out.write("%s,%s\n".format(result._1, result._2)))
     out.close()
+
+    if (validationPath != "None") {
+      val conf: Configuration = Configuration
+      val fs: FileSystem = FileSystem.get(conf)
+      val validationPaths = fs.listFiles(new Path(validationPath), true)
+      val checkPaths = fs.listFiles(new Path(outputPath), true)
+      while (validationPaths.hasNext && checkPaths.hasNext) {
+        val validationPath = validationPaths.next().getPath
+        val checkPath = checkPaths.next().getPath
+        val validationChecksum = fs.getFileChecksum(validationPath)
+        val checkChecksum = fs.getFileChecksum(checkPath)
+        Console.out.println("Comparing %s with %s".format(validationPath.getName, checkPath.getName))
+        assert(validationChecksum == checkChecksum)
+      }
+      Console.out.println("Checks finished correctly.")
+      assert(!validationPaths.hasNext && !checkPaths.hasNext)
+    }
   }
 }

@@ -390,10 +390,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     private def printLoadWithIndices(caerusPlan: CaerusPlan): Unit = {
       caerusPlan match {
         case caerusLoadWithIndices: CaerusLoadWithIndices =>
-          logger.info("CaerusLoadWithIndices path before serialization:")
+          logger.debug("CaerusLoadWithIndices path before serialization:")
           for (path <- caerusLoadWithIndices.sources.map(_.path))
-            logger.info(path)
-          logger.info("JSON Plan: %s".format(caerusLoadWithIndices.toJSON))
+            logger.debug(path)
+          logger.debug("JSON Plan: %s".format(caerusLoadWithIndices.toJSON))
         case _ =>
           caerusPlan.children.foreach(printLoadWithIndices)
       }
@@ -440,7 +440,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       logger.info("References: %s".format(references))
       logger.info("Reverse References: %s".format(reverseReferences))
-      printLoadWithIndices(optimizedPlan)
+      // printLoadWithIndices(optimizedPlan)
       Future.successful(OptimizationReply(optimizedCaerusPlan = optimizedPlan.toJSON))
     }
 

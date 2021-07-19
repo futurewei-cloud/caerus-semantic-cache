@@ -197,15 +197,15 @@ class SemanticCache(
             .map(row => row(0))
             .toSeq
             .asInstanceOf[Seq[String]]
-        logger.info("Filtered paths:")
+        logger.debug("Filtered paths:")
         for (path <- filteredPath)
-          logger.info(path)
+          logger.debug(path)
         applyOptimization = true
-        logger.info("CaerusLoadWithIndices sources:")
+        logger.debug("CaerusLoadWithIndices sources:")
         for (source <- caerusLoadWithIndices.sources)
-          logger.info(source.toString)
+          logger.debug(source.toString)
         val newPath: Seq[String] = caerusLoadWithIndices.sources.map(_.path).intersect(filteredPath)
-        logger.info("New path: %s".format(newPath.mkString("[", ",", "]")))
+        logger.debug("New path: %s".format(newPath.mkString("[", ",", "]")))
         val newSourceLoad: CaerusSourceLoad = CaerusSourceLoad(
           sourceLoad.output,
           sourceLoad.sources.filter(source => newPath.contains(source.path)),

@@ -561,9 +561,6 @@ case class UnifiedOptimizer() extends Optimizer {
             logger.info(caerusSourceLoadSource.toString)
           val caerusLoadWithIndices: CaerusLoadWithIndices =
             CaerusLoadWithIndices(caerusSourceLoad.output, indexLoadPlan, caerusSourceLoad.sources, index)
-          logger.info("CaerusLoadWithIndices paths:")
-          for (path <- caerusLoadWithIndices.sources.map(_.path))
-            logger.info(path)
           if (remainderSources.nonEmpty) {
             val remainderSource: CaerusSourceLoad =
               CaerusSourceLoad(caerusSourceLoad.output, remainderSources, caerusSourceLoad.format)
