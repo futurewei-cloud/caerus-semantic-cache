@@ -199,6 +199,7 @@ class SemanticCache(
             .asInstanceOf[Seq[String]]
         logger.info("Filtered path: %s".format(filteredPath.mkString("[", ",", "]")))
         applyOptimization = true
+        logger.info("CaerusLoadWithIndices path: %s".format(caerusLoadWithIndices.path.mkString("[", ",", "]")))
         val newPath: Seq[String] = caerusLoadWithIndices.path.intersect(filteredPath)
         logger.info("New path: %s".format(newPath.mkString("[", ",", "]")))
         val newSourceLoad: CaerusSourceLoad = CaerusSourceLoad(
