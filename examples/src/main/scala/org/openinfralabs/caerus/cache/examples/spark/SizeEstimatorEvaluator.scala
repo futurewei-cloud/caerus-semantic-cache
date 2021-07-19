@@ -5,7 +5,7 @@ import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
-import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SizeEstimator}
+import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SamplingSizeEstimator, SizeEstimator}
 import org.openinfralabs.caerus.cache.common._
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.examples.spark.gridpocket.{GridPocketSchemaProvider, GridPocketTrace}
@@ -14,6 +14,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.io.Source._
 
 object SizeEstimatorEvaluator {
+
   private def getSupportedPlans(plan: LogicalPlan, supportTree: Support[Boolean]): Seq[LogicalPlan] = {
     if (supportTree.support)
       Seq(plan)
@@ -47,6 +48,7 @@ object SizeEstimatorEvaluator {
         .appName(name = "SizeEstimatorEvaluator")
         .getOrCreate()
 
+
     // Create trace.
     val jobs: Seq[(String, DataFrame)] = GridPocketTrace.createTrace(spark, new GridPocketSchemaProvider, year,
       inputPath)
@@ -64,8 +66,10 @@ object SizeEstimatorEvaluator {
 
     // Calculate the estimates for all the candidates.
     val sizeEstimator: SizeEstimator = BasicSizeEstimator()
+    val samplingSizeEstimator: SizeEstimator = SamplingSizeEstimator(spark, 100)
     for ((inputPlan,candidate) <- candidatePairs) {
       sizeEstimator.estimateSize(inputPlan,candidate)
+      samplingSizeEstimator.estimateSize(inputPlan,candidate)
     }
     // Run the candidates by using semantic cache api.
     if (semanticCacheURI == "none") {
@@ -121,11 +125,14 @@ object SizeEstimatorEvaluator {
 
     for ((_,candidate) <- candidatePairs) {
       val Array(estimatedWrite,estimatedReadInfo) = candidate.sizeInfo.toString.split(",")
+      val Array(samplingWrite, samplingReadInfo) = candidate.sizeInfo.toString.split(",")
       candidate match {
         case Repartitioning(_,_,_) =>
-          Console.out.println("EstimatedWrite: %s, ActualWrite: %s, EstimatedRead: %s, ActualRead: %s".format(estimatedWrite,result(0)(4),estimatedReadInfo,result(1)(3)))
+          Console.out.println("EstimatedWrite: %s%s, ActualWrite: %s, EstimatedRead: %s%s, ActualRead: %s".format(
+            estimatedWrite,samplingWrite,result(0)(4),estimatedReadInfo,samplingReadInfo,result(1)(3)))
         case FileSkippingIndexing(_,_,_) =>
-          Console.out.println("EstimatedWrite: %s, ActualWrite: %s, EstimatedRead: %s, ActualRead: %s".format(estimatedWrite,result(2)(4),estimatedReadInfo,result(3)(3)))
+          Console.out.println("EstimatedWrite: %s%s, ActualWrite: %s, EstimatedRead: %s%s, ActualRead: %s".format(
+            estimatedWrite,samplingWrite,result(2)(4),estimatedReadInfo,samplingReadInfo,result(3)(3)))
         case Caching(_, _) =>
       }
     }
