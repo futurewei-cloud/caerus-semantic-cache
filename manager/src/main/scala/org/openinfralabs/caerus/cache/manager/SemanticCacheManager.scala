@@ -8,7 +8,7 @@ import org.apache.spark.sql.SparkSession
 import org.openinfralabs.caerus.cache.common.Mode.Mode
 import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common._
-import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
+import org.openinfralabs.caerus.cache.common.plans.{CaerusLoadWithIndices, CaerusPlan}
 import org.openinfralabs.caerus.cache.grpc.service._
 
 import scala.collection.mutable
@@ -387,6 +387,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       Future.successful(Ack())
     }
 
+    private def printLoadWithIndices(caerusPlan: CaerusPlan): Unit = {
+      caerusPlan match {
+        case caerusLoadWithIndices: CaerusLoadWithIndices =>
+          logger.info("CaerusLoadWithIndices path before serialization:")
+          for (p <- caerusLoadWithIndices.path)
+            logger.info(p)
+        case _ =>
+          caerusPlan.children.foreach(printLoadWithIndices)
+      }
+    }
+
     /**
      * Semantic Cache Client API. Optimization RPC.
      */
@@ -428,6 +439,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       logger.info("References: %s".format(references))
       logger.info("Reverse References: %s".format(reverseReferences))
+      printLoadWithIndices(optimizedPlan)
       Future.successful(OptimizationReply(optimizedCaerusPlan = optimizedPlan.toJSON))
     }
 

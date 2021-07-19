@@ -139,13 +139,6 @@ package object plans {
     index: Int
   ) extends CaerusLoad(output) {
     override val innerChildren: Seq[CaerusPlan] = Seq(child)
-
-    override def toJSON: String = {
-      Console.out.println("toJSON path:")
-      for (p <- path)
-        Console.out.println(p)
-      super.toJSON
-    }
   }
 
   abstract class CaerusWrite extends UnaryNode {
