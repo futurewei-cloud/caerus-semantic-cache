@@ -393,6 +393,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           logger.info("CaerusLoadWithIndices path before serialization:")
           for (p <- caerusLoadWithIndices.path)
             logger.info(p)
+          logger.info("JSON Plan: %s".format(caerusLoadWithIndices.toJSON))
         case _ =>
           caerusPlan.children.foreach(printLoadWithIndices)
       }
