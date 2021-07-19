@@ -391,8 +391,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       caerusPlan match {
         case caerusLoadWithIndices: CaerusLoadWithIndices =>
           logger.info("CaerusLoadWithIndices path before serialization:")
-          for (p <- caerusLoadWithIndices.path)
-            logger.info(p)
+          for (path <- caerusLoadWithIndices.sources.map(_.path))
+            logger.info(path)
           logger.info("JSON Plan: %s".format(caerusLoadWithIndices.toJSON))
         case _ =>
           caerusPlan.children.foreach(printLoadWithIndices)

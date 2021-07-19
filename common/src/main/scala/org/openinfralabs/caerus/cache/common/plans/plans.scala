@@ -135,7 +135,7 @@ package object plans {
   case class CaerusLoadWithIndices(
     override val output: Seq[Attribute],
     @transient child: CaerusPlan,
-    path: Seq[String],
+    sources: Seq[SourceInfo],
     index: Int
   ) extends CaerusLoad(output) {
     override val innerChildren: Seq[CaerusPlan] = Seq(child)
