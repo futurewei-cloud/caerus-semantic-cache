@@ -558,7 +558,7 @@ case class UnifiedOptimizer() extends Optimizer {
             prepareFileSkippingIndexingLoad(Seq(path), filterStatus(index), caerusSourceLoad.output(index).dataType)
           logger.info("CaerusSourceLoad sources:")
           for (caerusSourceLoadSource <- caerusSourceLoad.sources)
-            logger.info(caerusSourceLoadSource)
+            logger.info(caerusSourceLoadSource.toString)
           val caerusLoadWithIndices: CaerusLoadWithIndices =
             CaerusLoadWithIndices(caerusSourceLoad.output, indexLoadPlan, caerusSourceLoad.sources.map(_.path), index)
           logger.info("CaerusLoadWithIndices paths:")
