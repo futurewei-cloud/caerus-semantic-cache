@@ -43,9 +43,6 @@ import scala.reflect.ClassTag
  * For caching, the SamplingSizeEstimator should return the same value as the writeSizeInfo no matter what is the query.
  */
 case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends SizeEstimator {
-  private var sourceSize: Long = 0L
-
-
   private def detectSources(inputPlan: LogicalPlan, plan: CaerusPlan): Seq[RDD[InternalRow]] = {
     plan match {
       case caerusSourceLoad: CaerusSourceLoad =>
@@ -71,7 +68,7 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
    */
   override def estimateSize(inputPlan: LogicalPlan, candidate: Candidate): Unit = {
     candidate match {
-      case Repartitioning(caerusSourceLoad, _, _) =>
+      case Repartitioning(caerusSourceLoad, index, _) =>
         assert(inputPlan.isInstanceOf[LogicalRelation])
         val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
         assert(logicalRelation.relation.isInstanceOf[HadoopFsRelation])
@@ -81,21 +78,23 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .options(hadoopFsRelation.options)
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
+        // TODO: Create RDD with key similar to index.
         val rdd: RDD[InternalRow] = loadDF.queryExecution.toRdd
-        val (_, sketched) = sketch(rdd,sampleSize)
-        sourceSize = caerusSourceLoad.sources.size
+        val (numRecords, sketched) = sketch(rdd,sampleSize)
+        // TODO: Transform sample back to DataFrame.
+        val sourceSize: Long = caerusSourceLoad.size
         val candidates = ArrayBuffer.empty[Float]
-        sketched.foreach{ case (idx,n,sample) =>
+        sketched.foreach{case (idx,n,sample) =>
           val probability = (sample.length / n.toFloat)
             candidates +=  probability
 
         }
-        val writeSize: Long = (candidates.sum/candidates.size * sourceSize).toLong
+        val writeSize: Long = 1 // (candidates.sum/candidates.size * sourceSize).toLong
         val readSizeInfo: ReadSizeInfo = BasicReadSizeInfo(sourceSize / 10)
         val sizeInfo: SizeInfo = SizeInfo(writeSize, readSizeInfo)
         candidate.sizeInfo = Some(sizeInfo)
 
-      case FileSkippingIndexing(caerusSourceLoad, _, _) =>
+      case FileSkippingIndexing(caerusSourceLoad, index, _) =>
         assert(inputPlan.isInstanceOf[LogicalRelation])
         val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
         assert(logicalRelation.relation.isInstanceOf[HadoopFsRelation])
@@ -107,7 +106,11 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
         val rdd: RDD[InternalRow] = loadDF.queryExecution.toRdd
         val (_, sketched) = sketch(rdd,sampleSize)
-        sourceSize = caerusSourceLoad.sources.size
+        val samples: Array[Array[InternalRow]] = sketched.map(_._3)
+        val firstSample: Array[InternalRow] = samples(0)
+        val values: Array[Any] = firstSample.map(internalRow => internalRow.get(index, caerusSourceLoad.output(index).dataType))
+        // TODO: Find min/max values in the array. Create a bucket (min,max)
+        val sourceSize = caerusSourceLoad.sources.size
         val candidates = ArrayBuffer.empty[Float]
         sketched.foreach{ case (idx,n,sample) =>
           val probability = (sample.length / n.toFloat)
@@ -144,10 +147,10 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
    * @return (samples, input size)
    */
   private def reservoirSampleAndCount[T: ClassTag](
-                                            input: Iterator[T],
-                                            k: Int,
-                                            seed: Long = Random.nextLong())
-  : (Array[T], Long) = {
+    input: Iterator[T],
+    k: Int,
+    seed: Long = Random.nextLong()
+  ): (Array[T], Long) = {
     val reservoir = new Array[T](k)
     // Put the first k elements in the reservoir.
     var i = 0

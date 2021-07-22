@@ -48,29 +48,28 @@ object SizeEstimatorEvaluator {
         .appName(name = "SizeEstimatorEvaluator")
         .getOrCreate()
 
-
     // Create trace.
-    val jobs: Seq[(String, DataFrame)] = GridPocketTrace.createTrace(spark, new GridPocketSchemaProvider, year,
-      inputPath)
+    val jobs: Seq[(String, DataFrame)] =
+      GridPocketTrace.createTrace(spark, new GridPocketSchemaProvider, year, inputPath)
+    val job: (String, DataFrame) = jobs.head
 
     // Find all the candidates from these plans.
     val candidateSelector: CandidateSelector = BasicCandidateSelector()
-    val logicalPlans: Seq[LogicalPlan] = jobs.map(job => job._2.queryExecution.optimizedPlan)
-    val supportedPlans: Seq[LogicalPlan] = logicalPlans.flatMap(plan => getSupportedPlans(plan))
-    val plans: Seq[CaerusPlan] = supportedPlans.map(plan => SemanticCache.transform(plan))
-    val candidatePairs: Seq[(LogicalPlan,Candidate)] =
-      plans.indices
-        .flatMap(i => candidateSelector.getCandidates(supportedPlans(i), plans(i)))
-        .distinct
+    val logicalPlan: LogicalPlan = job._2.queryExecution.optimizedPlan
+    val supportedPlans: Seq[LogicalPlan] = getSupportedPlans(logicalPlan)
+    val supportedPlan: LogicalPlan = supportedPlans.head
+    val plan: CaerusPlan = SemanticCache.transform(supportedPlan)
+    val candidatePairs: Seq[(LogicalPlan,Candidate)] = candidateSelector.getCandidates(supportedPlan, plan)
     Console.out.println("Number of Candidates:\n%s".format(candidatePairs.length))
 
     // Calculate the estimates for all the candidates.
-    val sizeEstimator: SizeEstimator = BasicSizeEstimator()
+    val basicSizeEstimator: SizeEstimator = BasicSizeEstimator()
     val samplingSizeEstimator: SizeEstimator = SamplingSizeEstimator(spark, 100)
-    for ((inputPlan,candidate) <- candidatePairs) {
-      sizeEstimator.estimateSize(inputPlan,candidate)
-      samplingSizeEstimator.estimateSize(inputPlan,candidate)
-    }
+    candidatePairs.foreach(candidatePair => {
+      basicSizeEstimator.estimateSize(candidatePair._1, candidatePair._2)
+      samplingSizeEstimator.estimateSize(candidatePair._1, candidatePair._2)
+    })
+
     // Run the candidates by using semantic cache api.
     if (semanticCacheURI == "none") {
       Console.err.println("Semantic Cache URI should be defined.")
@@ -78,25 +77,25 @@ object SizeEstimatorEvaluator {
     }
     val semanticCache: SemanticCache = new SemanticCache(spark, semanticCacheURI)
 
-
     // Output: candidate No, write size, estimated write size, read size, estimated read size (min "2019-01-01 00:00:00, max "2019-02-01 00:00:00)
     val schema: StructType = new GridPocketSchemaProvider().getSchema
     val loadDF: DataFrame = spark.read.option("header", "true").schema(schema).csv(inputPath)
     candidatePairs.zipWithIndex.foreach(elem => {
+      val logicalPlan: LogicalPlan = elem._1._1
       val candidate: Candidate = elem._1._2
       val tempName: String = "temp-%d".format(elem._2)
       Console.out.println("Running candidate: %s".format(candidate))
       candidate match {
         case Repartitioning(_, index, _) =>
-          semanticCache.repartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
+          semanticCache.startRepartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case FileSkippingIndexing(_, index, _) =>
-          semanticCache.fileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
+          semanticCache.startFileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case Caching(_, _) =>
+          semanticCache.startCacheIntermediateData(logicalPlan, Tier.STORAGE_DISK, tempName)
       }
       Console.out.println(semanticCache.status)
       loadDF
-        .filter(col("date") < "%04d-02-01 00:00:00".format(year) &&
-          col("date") >= "%04d-01-01 00:00:00".format(year))
+        .filter(col("date") < "%04d-02-01 00:00:00".format(year) && col("date") >= "%04d-01-01 00:00:00".format(year))
         .write.mode("overwrite").option("header", "true").csv(outputPath)
       semanticCache.delete(tempName)
     })
