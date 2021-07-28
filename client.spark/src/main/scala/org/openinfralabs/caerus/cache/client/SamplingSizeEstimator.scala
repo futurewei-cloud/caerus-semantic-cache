@@ -7,13 +7,14 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.openinfralabs.caerus.cache.common.plans.{CaerusPlan, CaerusSourceLoad}
-import org.openinfralabs.caerus.cache.common.{BasicReadSizeInfo, Caching, Candidate, FileSkippingIndexing, ReadSizeInfo, Repartitioning, SizeInfo}
+import org.openinfralabs.caerus.cache.common.{BasicReadSizeInfo, BucketedReadSizeInfo, Caching, Candidate, FileSkippingIndexing, ReadSizeInfo, Repartitioning, SizeInfo}
 
 import java.nio.ByteBuffer
-import java.util.{Random => JavaRandom}
+import java.util.{Collections, Random => JavaRandom}
 import scala.util.hashing.MurmurHash3
 import scala.util.Random
 import scala.collection.mutable.ArrayBuffer
+import scala.math
 import scala.reflect.ClassTag
 
 
@@ -105,19 +106,28 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
         val rdd: RDD[InternalRow] = loadDF.queryExecution.toRdd
+        val sourceSize = caerusSourceLoad.size
         val (_, sketched) = sketch(rdd,sampleSize)
         val samples: Array[Array[InternalRow]] = sketched.map(_._3)
-        val firstSample: Array[InternalRow] = samples(0)
-        val values: Array[Any] = firstSample.map(internalRow => internalRow.get(index, caerusSourceLoad.output(index).dataType))
+        val buckets: Array[(Any,Any)] = new Array[(Any,Any)](samples.size)
+        var i = 0
         // TODO: Find min/max values in the array. Create a bucket (min,max)
-        val sourceSize = caerusSourceLoad.sources.size
+        for(sample <- samples) {
+          val values: Array[Any] = sample.map(internalRow => internalRow.get(index, caerusSourceLoad.output(index).dataType))
+          val minVal = values.reduceLeft((x,y) => if (x < y) x else y)
+          val maxVal = values.reduceLeft((x,y) => if (x > y) x else y)
+          buckets(i) = (minVal, maxVal)
+          i = i + 1
+        }
+        val readSizeInfo: ReadSizeInfo = BucketedReadSizeInfo(buckets, sourceSize)
+
         val candidates = ArrayBuffer.empty[Float]
         sketched.foreach{ case (idx,n,sample) =>
           val probability = (sample.length / n.toFloat)
             candidates +=  probability
         }
         val writeSize: Long = (candidates.sum/candidates.size * sourceSize).toLong
-        val readSizeInfo: ReadSizeInfo = BasicReadSizeInfo(sourceSize / 2)
+
         val sizeInfo: SizeInfo = SizeInfo(writeSize, readSizeInfo)
         candidate.sizeInfo = Some(sizeInfo)
 
