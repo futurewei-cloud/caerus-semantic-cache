@@ -81,13 +81,13 @@ case class LRCPlanner(optimizer: Optimizer, predictor: Predictor, path: String) 
     newContents = contents + ((topCandidate, topCandidatePath))
     var newSize: Long = newContents.keys.map(candidate => candidate.sizeInfo.get.writeSize).sum
     // Create a reference map (String -> Long).
-    refPath = mutable.HashMap.empty[String, Long]
+   // refPath = mutable.HashMap.empty[String, Long]
 
     // Optimize plans in the future prediction adding one reference in all contents when
     // necessary.
     // Create a reference map (Candidate -> Long)
     // Go through contents and update the new reference map.
-    refCandidate = mutable.HashMap.empty[Candidate, Long]
+   // refCandidate = mutable.HashMap.empty[Candidate, Long]
 
     plans.foreach(tempPlan => {
       optimizer.optimize(tempPlan, newContents, LRCPlanner.addReference(topCandidate))
@@ -99,7 +99,7 @@ case class LRCPlanner(optimizer: Optimizer, predictor: Predictor, path: String) 
     while (newSize > capacity) {
       logger.warn("Capacity is not big enough to hold an extra candidate. Do not change anything.")
       //val bottomCandidateInfo: (Candidate, Long) = findBottomCandidate(newContents, plans, newCost)
-      val bottomCandidate: Candidate = LRCPlanner.refCandidate.minBy(_._2)._1
+      val bottomCandidate: Candidate = refCandidate.maxBy(_._2)._1
       //newCost = bottomCandidateInfo._2
       newContents -= bottomCandidate
       newSize -= bottomCandidate.sizeInfo.get.writeSize

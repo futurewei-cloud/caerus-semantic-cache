@@ -169,6 +169,8 @@ case class UnifiedOptimizer(planner: String) extends Optimizer {
     val equalSourcePaths: Seq[(String,Seq[SourceInfo])] = contents.keys.flatMap(candidate => {
       if(planner == "lrc")
         LRCPlanner.addReference(candidate)
+      else if(planner=="mrd")
+        MRDPlanner.trackRef(candidate)
       candidate match {
         case Repartitioning(repartitionedSource, partitionIndex, _)
           if indices.contains(partitionIndex) && repartitionedSource == source =>
@@ -185,6 +187,8 @@ case class UnifiedOptimizer(planner: String) extends Optimizer {
     contents.keys.flatMap(candidate => {
       if(planner == "lrc")
         LRCPlanner.addReference(candidate)
+      else if(planner=="mrd")
+        MRDPlanner.trackRef(candidate)
       candidate match {
         case Repartitioning(repartitionedSource, partitionIndex, _) if indices.contains(partitionIndex) =>
           val diff: Option[Seq[SourceInfo]] = repartitionedSource.subsetOf(source)
@@ -260,6 +264,8 @@ case class UnifiedOptimizer(planner: String) extends Optimizer {
     contents.keys.flatMap(candidate => {
       if(planner == "lrc")
         LRCPlanner.addReference(candidate)
+      else if(planner=="mrd")
+        MRDPlanner.trackRef(candidate)
       candidate match {
         case FileSkippingIndexing(indexedSource, index, _)
           if indices.contains(index) && indexedSource.canEqual(source) =>
@@ -439,6 +445,8 @@ case class UnifiedOptimizer(planner: String) extends Optimizer {
       case candidate@Caching(cachedPlan, _) if cachedPlan.sameResult(plan) =>{
         if(planner == "lrc")
           LRCPlanner.addReference(candidate)
+        else if(planner=="mrd")
+          MRDPlanner.trackRef(candidate)
         val cacheLoad: CaerusCacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")
         Some(cacheLoad, None)}
       case _ =>
@@ -455,6 +463,8 @@ case class UnifiedOptimizer(planner: String) extends Optimizer {
     val res2: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap(candidate =>{
       if(planner == "lrc")
         LRCPlanner.addReference(candidate)
+      else if(planner=="mrd")
+        MRDPlanner.trackRef(candidate)
       candidate match {
       case Caching(cachedPlan, _) =>
         val cacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")

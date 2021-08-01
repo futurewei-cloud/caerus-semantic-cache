@@ -85,6 +85,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         if(conf.getString("planner.type") == "lrc") {
           plannerStr = conf.getString("planner.type")
         }
+        else if(conf.getString("planner.type") == "mrd"){
+          plannerStr = conf.getString("planner.type")
+        }
         else if(conf.getString("planner.type") == "basic"){
           plannerStr = conf.getString("planner.type")
         }
@@ -130,8 +133,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private val planner: Planner = {
     if(plannerStr == "lrc")
       LRCPlanner(optimizer, predictor, outputPath)
+    else if(plannerStr == "mrd")
+      MRDPlanner(optimizer, predictor, outputPath)
     else
       BasicStorageIOPlanner(optimizer, predictor, outputPath)
+
   }
   logger.info("%s planner initialized".format(plannerStr))
   private var server: Option[Server] = None
