@@ -106,7 +106,7 @@ object GridPocketTrace {
     out.close()
 
     if (validationPath != "None") {
-      val conf: Configuration = Configuration
+      val conf: Configuration = new Configuration()
       val fs: FileSystem = FileSystem.get(conf)
       val validationPaths = fs.listFiles(new Path(validationPath), true)
       val checkPaths = fs.listFiles(new Path(outputPath), true)
