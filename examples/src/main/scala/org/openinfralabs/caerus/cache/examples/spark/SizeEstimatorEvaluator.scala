@@ -1,11 +1,11 @@
 package org.openinfralabs.caerus.cache.examples.spark
 
+import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
-import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SamplingSizeEstimator, SizeEstimator}
+import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SizeEstimator}
 import org.openinfralabs.caerus.cache.common._
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.examples.spark.gridpocket.{GridPocketSchemaProvider, GridPocketTrace}
@@ -49,25 +49,36 @@ object SizeEstimatorEvaluator {
         .getOrCreate()
 
     // Create trace.
-    val jobs: Seq[(String, DataFrame)] =
-      GridPocketTrace.createTrace(spark, new GridPocketSchemaProvider, year, inputPath)
-    val job: (String, DataFrame) = jobs.head
+    var id: Int = -1
+    val jobs: Seq[(Int, String, DataFrame)] =
+      GridPocketTrace.createTrace(spark, new GridPocketSchemaProvider, year, inputPath).map(job => {
+        id += 1
+        (id, job._1, job._2)
+      })
 
     // Find all the candidates from these plans.
     val candidateSelector: CandidateSelector = BasicCandidateSelector()
-    val logicalPlan: LogicalPlan = job._2.queryExecution.optimizedPlan
-    val supportedPlans: Seq[LogicalPlan] = getSupportedPlans(logicalPlan)
-    val supportedPlan: LogicalPlan = supportedPlans.head
-    val plan: CaerusPlan = SemanticCache.transform(supportedPlan)
-    val candidatePairs: Seq[(LogicalPlan,Candidate)] = candidateSelector.getCandidates(supportedPlan, plan)
-    Console.out.println("Number of Candidates:\n%s".format(candidatePairs.length))
+    val logicalPlans: Seq[(Int, LogicalPlan)] = jobs.map(job => (job._1, job._3.queryExecution.optimizedPlan))
+    val supportedPlans: Seq[(Int, LogicalPlan)] = logicalPlans.flatMap(logicalPlan => {
+      getSupportedPlans(logicalPlan._2).map(supportedPlan => (logicalPlan._1, supportedPlan))
+    })
+    val caerusPlans: Seq[(Int, CaerusPlan)] = supportedPlans.map(supportedPlan => {
+      (supportedPlan._1, SemanticCache.transform(supportedPlan._2))
+    })
+    val candidates: Seq[(Int, LogicalPlan, Candidate)] =
+      caerusPlans.indices.flatMap(i => {
+        candidateSelector.getCandidates(supportedPlans(i)._2, caerusPlans(i)._2).distinct.map(candidate => {
+          assert(caerusPlans(i)._1 == supportedPlans(i)._1)
+          (caerusPlans(i)._1, candidate._1, candidate._2)
+        })
+      })
 
     // Calculate the estimates for all the candidates.
     val basicSizeEstimator: SizeEstimator = BasicSizeEstimator()
-    val samplingSizeEstimator: SizeEstimator = SamplingSizeEstimator(spark, 100)
-    candidatePairs.foreach(candidatePair => {
-      basicSizeEstimator.estimateSize(candidatePair._1, candidatePair._2)
-      samplingSizeEstimator.estimateSize(candidatePair._1, candidatePair._2)
+    // val samplingSizeEstimator: SizeEstimator = SamplingSizeEstimator(spark, 100)
+    candidates.foreach(candidate => {
+      basicSizeEstimator.estimateSize(candidate._2, candidate._3)
+      // samplingSizeEstimator.estimateSize(candidate._2, candidate._3)
     })
 
     // Run the candidates by using semantic cache api.
@@ -77,13 +88,17 @@ object SizeEstimatorEvaluator {
     }
     val semanticCache: SemanticCache = new SemanticCache(spark, semanticCacheURI)
 
-    // Output: candidate No, write size, estimated write size, read size, estimated read size (min "2019-01-01 00:00:00, max "2019-02-01 00:00:00)
+    // Output:
+    // candidate No, write size, estimated write size, read size, estimated read size (min "2019-01-01 00:00:00,
+    // max "2019-02-01 00:00:00)
     val schema: StructType = new GridPocketSchemaProvider().getSchema
     val loadDF: DataFrame = spark.read.option("header", "true").schema(schema).csv(inputPath)
-    candidatePairs.zipWithIndex.foreach(elem => {
-      val logicalPlan: LogicalPlan = elem._1._1
-      val candidate: Candidate = elem._1._2
-      val tempName: String = "temp-%d".format(elem._2)
+    candidates.zipWithIndex.foreach(candidateInfo => {
+      val jobID: Int = candidateInfo._1._1
+      val logicalPlan: LogicalPlan = candidateInfo._1._2
+      val candidate: Candidate = candidateInfo._1._3
+      val candidateID: Int = candidateInfo._2
+      val tempName: String = "temp-%d".format(candidateID)
       Console.out.println("Running candidate: %s".format(candidate))
       candidate match {
         case Repartitioning(_, index, _) =>
@@ -94,9 +109,7 @@ object SizeEstimatorEvaluator {
           semanticCache.startCacheIntermediateData(logicalPlan, Tier.STORAGE_DISK, tempName)
       }
       Console.out.println(semanticCache.status)
-      loadDF
-        .filter(col("date") < "%04d-02-01 00:00:00".format(year) && col("date") >= "%04d-01-01 00:00:00".format(year))
-        .write.mode("overwrite").option("header", "true").csv(outputPath)
+      jobs(jobID)._3.write.option("header","true").csv(outputPath + Path.SEPARATOR + tempName)
       semanticCache.delete(tempName)
     })
 
@@ -122,7 +135,7 @@ object SizeEstimatorEvaluator {
     }
     bufferedSource.close()
 
-    for ((_,candidate) <- candidatePairs) {
+    for ((_,_,candidate) <- candidates) {
       val Array(estimatedWrite,estimatedReadInfo) = candidate.sizeInfo.toString.split(",")
       val Array(samplingWrite, samplingReadInfo) = candidate.sizeInfo.toString.split(",")
       candidate match {

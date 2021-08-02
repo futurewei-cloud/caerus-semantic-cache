@@ -51,7 +51,7 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor, pat
 
   private def findCost(contents: Map[Candidate,String], plans: Seq[CaerusPlan]): Long = {
     val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
-    val storageSourceIOCost: Long = plans.map(plan => {
+    val storageSourceIOCost: Long = plans.zipWithIndex.map(plan => {
       val optimizedPlan: CaerusPlan = optimizer.optimize(plan, contents, addReference(tempReferences))
       calculateSourceStorageIOCost(optimizedPlan)
     }).sum
