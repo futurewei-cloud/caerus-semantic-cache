@@ -84,9 +84,12 @@ case class MRDPlanner(optimizer: Optimizer, predictor: Predictor, path: String) 
       if (distance.contains(k))
         refCandidate(k) = distance(k)
     }
-    logger.info("Contents with reference distance:\n%s".format(distance.mkString("\n")))
-    logger.info("Candidates with reference distance:\n%s".format(refCandidate.mkString("\n")))
-
+    logger.info("Contents with reference distance:")
+    distance.foreach { case (key, values) => logger.info("\n%s".format(key + " - " + values.mkString("-")))
+    }
+    logger.info("Candidates with reference distance:")
+    refCandidate.foreach { case (key, values) => logger.info("\n%s".format(key + " - " + values.mkString("-")))
+    }
     // Pick the maximum reference distance candidate as top candidate.
     //resolving conflict by checking next distance causes exception as not all candidates has same frequency of access
  /*   val topCandidate = {
