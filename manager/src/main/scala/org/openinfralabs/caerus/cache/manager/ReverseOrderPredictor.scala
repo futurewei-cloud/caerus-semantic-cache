@@ -8,16 +8,14 @@ case class ReverseOrderPredictor(windowSize: Int) extends Predictor(windowSize) 
 
   override def getPredictions(caerusPlan: CaerusPlan): Seq[CaerusPlan] = {
     assert(futurePlans.length <= windowSize)
-    if (futurePlans.contains(caerusPlan))
-      futurePlans = futurePlans.filterNot(plan => plan == caerusPlan)
-    if (futurePlans.nonEmpty && futurePlans.length == windowSize)
+    // TODO: Discuss with Jit why do we need this?
+    //if (futurePlans.contains(caerusPlan))
+    //  futurePlans = futurePlans.filterNot(plan => plan == caerusPlan)
+    if (futurePlans.length > windowSize)
       futurePlans = futurePlans.dropRight(1)
-    logger.info("Caerus plans from planner: %s".format(caerusPlan.toString()))
+    logger.info("Caerus plans from planner: %s".format(caerusPlan))
     futurePlans = caerusPlan +: futurePlans
-    if (futurePlans.nonEmpty) {
-      logger.info("Future plans: %s".format(futurePlans.toString()))
-      logger.info("Future plan tail: %s".format(futurePlans.last.toString()))
-    }
+    logger.info("Future plans:\n%s".format(futurePlans.mkString("\n")))
     futurePlans.tail
   }
 }
