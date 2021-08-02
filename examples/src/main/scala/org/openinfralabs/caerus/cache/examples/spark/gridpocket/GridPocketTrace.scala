@@ -39,7 +39,7 @@ object GridPocketTrace {
 
   private def printUsage(): Unit = {
     Console.out.println("Usage: scala <jar file> <spark URI> <semantic cache used> <year> <input path> <output path>" +
-      "<results path> <print path>")
+      " <results path> <print path> <validation path>")
   }
 
   private def getSupportedPlans(plan: LogicalPlan, supportTree: Support[Boolean]): Seq[LogicalPlan] = {
@@ -56,7 +56,7 @@ object GridPocketTrace {
 
   def main(args: Array[ String ]): Unit = {
     // Take arguments.
-    if (args.length != 7) {
+    if (args.length != 8) {
       printUsage()
       System.exit(0)
     }
