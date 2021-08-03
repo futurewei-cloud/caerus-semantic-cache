@@ -1,7 +1,6 @@
 package org.openinfralabs.caerus.cache.examples.spark.gridpocket
 
-import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
@@ -106,20 +105,20 @@ object GridPocketTrace {
     out.close()
 
     if (validationPath != "None") {
-      val conf: Configuration = new Configuration()
-      val fs: FileSystem = FileSystem.get(conf)
-      val validationPaths = fs.listFiles(new Path(validationPath), true)
-      val checkPaths = fs.listFiles(new Path(outputPath), true)
-      while (validationPaths.hasNext && checkPaths.hasNext) {
-        val validationPath = validationPaths.next().getPath
-        val checkPath = checkPaths.next().getPath
-        val validationChecksum = fs.getFileChecksum(validationPath)
-        val checkChecksum = fs.getFileChecksum(checkPath)
-        Console.out.println("Comparing %s with %s".format(validationPath.getName, checkPath.getName))
-        assert(validationChecksum == checkChecksum)
-      }
+      jobs.foreach(job => {
+        val outputFilename: String = outputPath + Path.SEPARATOR + job._1
+        val outputDF: DataFrame = spark.read.option("header", "true").csv(outputFilename)
+        val validationFilename = validationPath + Path.SEPARATOR + job._1
+        val validationDF: DataFrame = spark.read.option("header", "true").csv(validationFilename)
+        val outputCount: Long = outputDF.count()
+        val validationCount: Long = outputDF.count()
+        Console.out.println("Checking equality between %s and %s".format(outputFilename, validationFilename))
+        assert(outputCount == validationCount)
+        val unionDF: DataFrame = outputDF.union(validationDF).distinct()
+        val unionCount: Long = unionDF.count()
+        assert(unionCount == outputCount)
+      })
       Console.out.println("Checks finished correctly.")
-      assert(!validationPaths.hasNext && !checkPaths.hasNext)
     }
   }
 }

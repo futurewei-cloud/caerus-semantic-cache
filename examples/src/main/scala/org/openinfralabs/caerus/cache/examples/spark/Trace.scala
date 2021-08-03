@@ -1,5 +1,6 @@
 package org.openinfralabs.caerus.cache.examples.spark
 
+import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.DataFrame
 
 /**
@@ -28,7 +29,7 @@ class Trace(jobs: Seq[(String,DataFrame)]) {
       val name = job._1
       val df = job._2
       val startTime: Long = System.nanoTime()
-      runJob(df, outputPath + "/" + name)
+      runJob(df, outputPath + Path.SEPARATOR + name)
       val endTime: Long = System.nanoTime()
       (name, endTime-startTime)
     })
