@@ -7,7 +7,7 @@ case class ReverseOrderPredictor(windowSize: Int) extends Predictor(windowSize) 
   private var futurePlans: Seq[CaerusPlan] = Seq.empty[CaerusPlan]
 
   override def getPredictions(caerusPlan: CaerusPlan): Seq[CaerusPlan] = {
-    assert(futurePlans.length <= windowSize)
+    assert(futurePlans.length <= windowSize + 1)
     // TODO: Discuss with Jit why do we need this?
     //if (futurePlans.contains(caerusPlan))
     //  futurePlans = futurePlans.filterNot(plan => plan == caerusPlan)
