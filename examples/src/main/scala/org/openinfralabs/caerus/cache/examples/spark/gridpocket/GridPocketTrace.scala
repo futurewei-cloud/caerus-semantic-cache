@@ -96,14 +96,7 @@ object GridPocketTrace {
     // Run trace.
     val results: Seq[(String,Long)] = trace.execute(outputPath)
 
-    // Close spark session.
-    spark.stop()
-
-    // Write result in output path.
-    val out: BufferedWriter = new BufferedWriter(new FileWriter(resultsPath))
-    results.foreach(result => out.write("%s,%s\n".format(result._1, result._2)))
-    out.close()
-
+    // Validate that execution of trace produced the right results.
     if (validationPath != "None") {
       jobs.foreach(job => {
         val outputFilename: String = outputPath + Path.SEPARATOR + job._1
@@ -120,5 +113,13 @@ object GridPocketTrace {
       })
       Console.out.println("Checks finished correctly.")
     }
+
+    // Close spark session.
+    spark.stop()
+
+    // Write result in result path.
+    val out: BufferedWriter = new BufferedWriter(new FileWriter(resultsPath))
+    results.foreach(result => out.write("%s,%s\n".format(result._1, result._2)))
+    out.close()
   }
 }
