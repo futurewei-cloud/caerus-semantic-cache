@@ -5,13 +5,15 @@ import com.typesafe.scalalogging.LazyLogging
 import io.grpc.{Server, ServerBuilder}
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.SparkSession
+import org.openinfralabs.caerus.cache.common.Mode.Mode
 import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common._
-import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
+import org.openinfralabs.caerus.cache.common.plans.{CaerusLoadWithIndices, CaerusPlan}
 import org.openinfralabs.caerus.cache.grpc.service._
 
 import scala.collection.mutable
 import scala.concurrent.{ExecutionContext, Future}
+import scala.io.Source
 
 /**
  * Semantic Cache service, which is shared and offers semantic-aware caching capabilities.
@@ -23,9 +25,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     "compute-memory" -> Tier.COMPUTE_MEMORY,
     "compute-disk" -> Tier.COMPUTE_DISK,
     "storage-memory" -> Tier.STORAGE_MEMORY,
-    "storage-disk" -> Tier.STORAGE_DISK)
+    "storage-disk" -> Tier.STORAGE_DISK
+  )
   private val tiers: mutable.HashMap[Tier, String] = mutable.HashMap.empty[Tier, String]
   private val capacity: mutable.HashMap[Tier, Long] = mutable.HashMap.empty[Tier, Long]
+  private var lastTier: Option[Tier] = None
   for (tier <- tierNames.keys) {
     val tierConfStr: String = "caches." + tier
     val siteConfStr: String = tierConfStr + ".site"
@@ -34,14 +38,30 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val site: String = conf.getString(siteConfStr)
       val size: Long = conf.getMemorySize(sizeConfStr).toBytes
       if (size <= 0) {
-        logger.warn("Size for tier %s is lower or equal to 0\n".format(tier))
+        logger.warn("Size for tier %s is lower or equal to 0".format(tier))
       } else {
-          tiers(tierNames(tier)) = site
-          capacity(tierNames(tier)) = size
+        tiers(tierNames(tier)) = site
+        capacity(tierNames(tier)) = size
+        lastTier = Some(tierNames(tier))
       }
     } else {
-        logger.warn("Not all parameters are set for tier %s.\n".format(tier))
+        logger.warn("Not all parameters are set for tier %s.".format(tier))
     }
+  }
+
+  private val operationMode: Mode = {
+    if (conf.hasPath("server.mode")) {
+      val operationMode: Int = conf.getInt("server.mode")
+      logger.info("Operation mode set to %s".format(operationMode))
+      Mode(operationMode)
+    } else {
+      logger.warn("Operation mode not set. Using default mode 3.")
+      Mode(3)
+    }
+  }
+  if (operationMode == Mode.FULLY_AUTOMATIC && (tiers.size > 1 || !tiers.contains(Tier.STORAGE_DISK))) {
+    logger.error("Operation mode 3 cannot be defined with multiple tiers. Only with STORAGE_DISK.")
+    System.exit(-1)
   }
 
   private val port: Int = {
@@ -61,10 +81,30 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private var pathId: Long = 0L
   private val names: mutable.HashMap[String, Candidate] = mutable.HashMap.empty[String, Candidate]
   private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
-  private val reservations: mutable.HashMap[(String,Candidate),(String,Long)] =
-    mutable.HashMap.empty[(String,Candidate),(String,Long)]
+  private val reservations: mutable.HashMap[(String,Candidate),String] =
+    mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
   private val optimizer: Optimizer = UnifiedOptimizer()
+  private val predictorConfStr: String = "predictor"
+  private val windowSize: Int = conf.getInt(predictorConfStr + ".windowSize")
+  private val predictor: Predictor = conf.getString(predictorConfStr + ".type") match {
+    case "oracle" =>
+      val filename: String = conf.getString(predictorConfStr + ".file")
+      val source = Source.fromFile(filename)
+      val futurePlans: Seq[CaerusPlan] = source.getLines().map(CaerusPlan.fromJSON).toSeq
+      logger.debug("Future Plans:\n%s".format(futurePlans.mkString("\n")))
+      OraclePredictor(futurePlans, windowSize)
+    case "reverseorder" =>
+      logger.info("Reverse order predictor with limit : %s".format(windowSize))
+      ReverseOrderPredictor(windowSize)
+  }
+  private val outputPath: String = {
+    if (tiers.contains(Tier.STORAGE_DISK))
+      tiers(Tier.STORAGE_DISK)
+    else
+      "none"
+  }
+  private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
@@ -73,7 +113,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private def start(): Unit = {
     val service = SemanticCacheServiceGrpc.bindService(new SemanticCacheService, execCtx)
     server = Some(ServerBuilder.forPort(port).addService(service).build.start)
-    logger.info("Server started on port %s\n".format(port))
+    logger.info("Server started with mode %d on port %s\n".format(operationMode.id, port))
     sys.addShutdownHook {
       logger.warn("Shutting down gRPC server...\n")
       stop()
@@ -113,16 +153,16 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     res
   }
 
-  private def getPath(candidate: Candidate, tier: Tier): String = {
+  private def generatePath(candidateName: String, tier: Tier): String = {
     if (!tiers.contains(tier))
       throw new RuntimeException("Tier %s is not associated with a cache.".format(tier))
-    val candidateName = candidate match {
-      case _: Repartitioning => "R"
-      case _: FileSkippingIndexing => "FSI"
-      case _: Caching => "C"
-      case _ => throw new RuntimeException("Candidate %s not recognized.".format(candidate))
-    }
     tiers(tier) + Path.SEPARATOR + candidateName + getPathId.toString
+  }
+
+  private def getPath(candidateName: String, tier: Tier): String = {
+    if (!tiers.contains(tier))
+      throw new RuntimeException("Tier %s is not associated with a cache.".format(tier))
+    tiers(tier) + Path.SEPARATOR + candidateName
   }
 
   private def getTierFromPath(path: String): Tier = {
@@ -159,9 +199,13 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
       val candidate: Candidate = Candidate.fromJSON(request.candidate)
+      val reservedSize: Long = candidate.sizeInfo.get.writeSize
       val tier: Tier = Tier(request.tier)
       val path = try {
-        getPath(candidate, tier)
+        if (operationMode == Mode.FULLY_AUTOMATIC || operationMode == Mode.MANUAL_EVICTION)
+          getPath(request.name, tier)
+        else
+          generatePath(request.name, tier)
       } catch {
         case e: Exception =>
           logger.warn(e.getMessage)
@@ -177,17 +221,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
-      if (capacity(tier) < request.estimatedSize) {
+      if (capacity(tier) < candidate.sizeInfo.get.writeSize) {
         val message: String = "Insufficient capacity for tier %s.\tAsked to reserve: %s\tAvailable: %s"
-            .format(tier, request.estimatedSize, capacity(tier))
+            .format(tier, candidate.sizeInfo.get.writeSize, capacity(tier))
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
       names(request.name) = candidate
-      reservations((request.clientId,candidate)) = (path,request.estimatedSize)
-      capacity(tier) -= request.estimatedSize
+      reservations((request.clientId,candidate)) = path
+      capacity(tier) -= reservedSize
       logger.info("Reserve for candidate:\n%s\nReserved size: %s\tUpdated capacity of tier %s: %s."
-          .format(candidate.toString, request.estimatedSize, tier, capacity(tier)))
+          .format(candidate.toString, reservedSize, tier, capacity(tier)))
       Future.successful(PathReply(path))
     }
 
@@ -217,9 +261,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
-      val reservationStatus: (String,Long) = reservations((request.clientId,candidate))
-      val path: String = reservationStatus._1
-      val reservedSize: Long = reservationStatus._2
+      val path: String = reservations((request.clientId,candidate))
+      val reservedSize: Long = candidate.sizeInfo.get.writeSize
       val tier: Tier = getTierFromPath(path)
       if (request.commit) {
         logger.info("Submit candidate:\n %s\nReserved size: %s\tReal size: %s\tCorrected Capacity: %s.".format(
@@ -228,14 +271,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           request.realSize,
           capacity(tier) + reservedSize - request.realSize
         ))
-        contents.put(candidate,path)
+        val newSizeInfo: SizeInfo = SizeInfo(request.realSize, candidate.sizeInfo.get.readSizeInfo)
+        val newCandidate: Candidate = candidate.withNewSizeInfo(newSizeInfo)
+        names(request.name) = newCandidate
+        contents.put(newCandidate,path)
         reverseReferences(path) = Set.empty[String]
         logger.info("Updated Contents: %s\n".format(contents))
       } else {
         logger.info("Cancel candidate:\n%s\nReserved size: %s\tCorrected Capacity: %s.".format(
           candidate.toString,
           reservedSize,
-          capacity(tier) + reservedSize - request.realSize
+          capacity(tier) + reservedSize
         ))
         names.remove(request.name)
       }
@@ -247,7 +293,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     /**
      * Semantic Cache Administrator API. Deletion RPC.
      */
-    override def delete(request: DeleteRequest): Future[PathReply] = {
+    override def delete(request: DeleteRequest): Future[DeleteReply] = {
       if (!registeredClients.contains(request.clientId)) {
         val message: String = "Client %s is not registered.".format(request.clientId)
         logger.warn(message)
@@ -261,6 +307,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       val candidate: Candidate = names(name)
+      val format: String = candidate match {
+        case _: Repartitioning | _: Caching => "parquet"
+        case _: FileSkippingIndexing => "json"
+      }
       if (!contents.contains(candidate)) {
         val message = "Submission is ignored since there is no content for the following candidate:\n%s"
           .format(candidate.toString)
@@ -284,7 +334,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       logger.info("Reverse References: %s".format(reverseReferences))
       contents.remove(candidate)
       logger.info("Updated Contents: %s\n".format(contents))
-      Future.successful(PathReply(path))
+      Future.successful(DeleteReply(path, format))
     }
 
     /**
@@ -297,7 +347,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
-      if (!markedForDeletion.contains(request.path)) {
+      if (!markedForDeletion(request.path)) {
         val message: String = "Release for path %s is ignored since it is not marked for deletion.".format(request.path)
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
@@ -305,7 +355,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val tier: Tier = getTierFromPath(request.path)
       capacity(tier) -= request.realSize
       logger.info("Free:%s\tReleased size: %s\tCorrected Capacity: %s."
-          .format(request.path, request.realSize, capacity(tier)))
+        .format(request.path, request.realSize, capacity(tier)))
       Future.successful(Ack())
     }
 
@@ -318,9 +368,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         logger.warn(message)
         return Future.failed(new RuntimeException(message))
       }
+      logger.info("Register client %s with timeout %s and mode %d".format(request.clientId, timeout, operationMode.id))
       registeredClients(request.clientId) = System.currentTimeMillis()
       references(request.clientId) = Set.empty[String]
-      Future.successful(RegisterReply(timeout))
+      Future.successful(RegisterReply(operationMode.id, timeout))
     }
 
     /**
@@ -336,6 +387,18 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       Future.successful(Ack())
     }
 
+    private def printLoadWithIndices(caerusPlan: CaerusPlan): Unit = {
+      caerusPlan match {
+        case caerusLoadWithIndices: CaerusLoadWithIndices =>
+          logger.debug("CaerusLoadWithIndices path before serialization:")
+          for (path <- caerusLoadWithIndices.sources.map(_.path))
+            logger.debug(path)
+          logger.debug("JSON Plan: %s".format(caerusLoadWithIndices.toJSON))
+        case _ =>
+          caerusPlan.children.foreach(printLoadWithIndices)
+      }
+    }
+
     /**
      * Semantic Cache Client API. Optimization RPC.
      */
@@ -349,13 +412,35 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val caerusPlan: CaerusPlan = CaerusPlan.fromJSON(request.caerusPlan)
       val availableContents: mutable.Map[Candidate,String] =
         contents.filter(element => !markedForDeletion.contains(element._2))
-      val optimizedPlan = optimizer.optimize(
-          caerusPlan,
-          availableContents.toMap[Candidate,String],
-          path => addReference(request.clientId, path)
-      )
+      val optimizedPlan = {
+        if (operationMode == Mode.MANUAL_WRITE) {
+          optimizer.optimize(
+            caerusPlan,
+            availableContents.toMap[Candidate,String],
+            path => addReference(request.clientId, path)
+          )
+        } else if (operationMode == Mode.FULLY_AUTOMATIC) {
+          val cap: Long = {
+            if (lastTier.isDefined)
+              capacity(lastTier.get)
+            else
+              0L
+          }
+          planner.optimize(
+            caerusPlan,
+            availableContents.toMap[Candidate,String],
+            request.candidates.map(Candidate.fromJSON),
+            cap
+          )
+        } else {
+          val message = "Mode %s is not supported yet.".format(operationMode.id)
+          logger.warn(message)
+          caerusPlan
+        }
+      }
       logger.info("References: %s".format(references))
       logger.info("Reverse References: %s".format(reverseReferences))
+      // printLoadWithIndices(optimizedPlan)
       Future.successful(OptimizationReply(optimizedCaerusPlan = optimizedPlan.toJSON))
     }
 
@@ -369,6 +454,11 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       registeredClients(request.clientId) = System.currentTimeMillis()
+      if (operationMode != Mode.MANUAL_WRITE) {
+        val message: String = "Get Status API is not allowed for mode %s".format(operationMode)
+        logger.warn(message)
+        return Future.failed(new RuntimeException(message))
+      }
       Future.successful(getCacheStatus)
     }
   }

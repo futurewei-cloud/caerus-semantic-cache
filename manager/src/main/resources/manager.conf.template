@@ -1,8 +1,4 @@
 caches {
-    compute-memory {
-        site = "alluxio://localhost:19998/tmp/cache"
-        size = 4G
-    }
     storage-disk {
         site = "hdfs://localhost:9000/tmp/cache"
         size = 256G
@@ -10,4 +6,10 @@ caches {
 }
 server {
     port = 35001
+    mode = 3
+}
+predictor {
+    type = "oracle"
+    file = "futurePlans.json"
+    windowSize = ""
 }

@@ -9,7 +9,7 @@ service SemanticCacheService {
   // Semantic Cache Administrator API. Commit reservation RPC.
   rpc commitReservation (CommitReservationRequest) returns (Ack) {}
   // Semantic Cache Administrator API. Deletion RPC.
-  rpc delete (DeleteRequest) returns (PathReply) {}
+  rpc delete (DeleteRequest) returns (DeleteReply) {}
   // Semantic Cache Administrator API. Commit deletion RPC.
   rpc free (FreeRequest) returns (Ack) {}
 
@@ -27,7 +27,6 @@ service SemanticCacheService {
 message ReservationRequest {
   string clientId = 1;
   string candidate = 2;
-  int64 estimatedSize = 3;
   int32 tier = 4;
   string name = 5;
 }
@@ -54,12 +53,18 @@ message PathReply {
   string path = 1;
 }
 
+message DeleteReply {
+  string path = 1;
+  string format = 2;
+}
+
 message RegisterRequest {
   string clientId = 1;
 }
 
 message RegisterReply {
-  int64 terminationTimeout = 1;
+  int32 mode = 1;
+  int64 terminationTimeout = 2;
 }
 
 message HeartbeatRequest {
@@ -71,6 +76,7 @@ message Ack {}
 message OptimizationRequest {
   string clientId = 1;
   string caerusPlan = 2;
+  repeated string candidates = 3;
 }
 
 message OptimizationReply {
