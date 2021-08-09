@@ -93,16 +93,22 @@ object GridPocketTrace {
       out.close()
     }
 
-    // Run trace.
+    // Run trace and stop spark.
     val results: Seq[(String,Long)] = trace.execute(outputPath)
+    spark.stop()
 
     // Validate that execution of trace produced the right results.
     if (validationPath != "None") {
+      val sparkValidation: SparkSession =
+        SparkSession.builder()
+          .master(sparkURI)
+          .appName(name = "GridPocketTraceValidation")
+          .getOrCreate()
       jobs.foreach(job => {
         val outputFilename: String = outputPath + Path.SEPARATOR + job._1
-        val outputDF: DataFrame = spark.read.option("header", "true").csv(outputFilename)
+        val outputDF: DataFrame = sparkValidation.read.option("header", "true").csv(outputFilename)
         val validationFilename = validationPath + Path.SEPARATOR + job._1
-        val validationDF: DataFrame = spark.read.option("header", "true").csv(validationFilename)
+        val validationDF: DataFrame = sparkValidation.read.option("header", "true").csv(validationFilename)
         val outputCount: Long = outputDF.count()
         val validationCount: Long = outputDF.count()
         Console.out.println("Checking equality between %s and %s".format(outputFilename, validationFilename))
@@ -111,11 +117,9 @@ object GridPocketTrace {
         val unionCount: Long = unionDF.count()
         assert(unionCount == outputCount)
       })
+      sparkValidation.stop()
       Console.out.println("Checks finished correctly.")
     }
-
-    // Close spark session.
-    spark.stop()
 
     // Write result in result path.
     val out: BufferedWriter = new BufferedWriter(new FileWriter(resultsPath))

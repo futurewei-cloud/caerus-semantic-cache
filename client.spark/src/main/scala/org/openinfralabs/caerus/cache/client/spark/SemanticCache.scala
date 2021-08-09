@@ -264,7 +264,8 @@ class SemanticCache(
           CaerusFalse()
         }
       case CaerusCaching(name, child) =>
-        val bytesWritten: Long = startCacheIntermediateData(child, Tier.STORAGE_DISK, name.split(Path.SEPARATOR).last)
+        val plan: LogicalPlan = transformBack(child, inputPlan, inputCaerusPlan)
+        val bytesWritten: Long = startCacheIntermediateData(plan, Tier.STORAGE_DISK, name.split(Path.SEPARATOR).last)
         if (bytesWritten >= 0) {
           CaerusTrue()
         } else {
@@ -818,9 +819,6 @@ class SemanticCache(
  * Easy way to activate semantic cache optimization for users.
  */
 object SemanticCache {
-  var semanticCache: Option[SemanticCache] = None
-  var logger: Option[Logger] = None
-
   private[client] def getIndex(attrib: Attribute) = attrib.exprId.id.toInt
 
   private[cache] def checkSupport(plan: LogicalPlan): Support[Boolean] = {
@@ -884,11 +882,8 @@ object SemanticCache {
   private def transformCanonicalized(plan: LogicalPlan): CaerusPlan = {
     val caerusPlan = plan match {
       case LogicalRelation(hadoopFsRelation: HadoopFsRelation, output, _, _) =>
-        if (!hadoopFsRelation.fileFormat.isInstanceOf[DataSourceRegister]) {
-          if (logger.isDefined)
-            logger.get.warn("File format %s is not supported.\n".format(hadoopFsRelation.fileFormat))
+        if (!hadoopFsRelation.fileFormat.isInstanceOf[DataSourceRegister])
           return plan
-        }
         val inputFiles: Seq[FileStatus] = hadoopFsRelation.location.asInstanceOf[PartitioningAwareFileIndex].allFiles()
         val inputs: Seq[SourceInfo] =
           inputFiles.map(f => SourceInfo(f.getPath.toString, f.getModificationTime, 0, f.getLen))
@@ -902,13 +897,10 @@ object SemanticCache {
 
   private[cache] def transform(plan: LogicalPlan): CaerusPlan = {
     val canonicalizedPlan: CaerusPlan = plan.canonicalized
-    if (logger.isDefined)
-      logger.get.debug("Canonicalized Spark Plan:\n%s".format(canonicalizedPlan))
     transformCanonicalized(canonicalizedPlan)
   }
 
   def activate(sparkSession: SparkSession, semanticCacheURI: String): Unit = {
-    semanticCache = Some(new SemanticCache(sparkSession, semanticCacheURI))
-    logger = Some(semanticCache.get.logger)
+    new SemanticCache(sparkSession, semanticCacheURI)
   }
 }
