@@ -5,7 +5,7 @@ import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.openinfralabs.caerus.cache.client.spark.{SemanticCache, Support}
-import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SizeEstimator}
+import org.openinfralabs.caerus.cache.client.{BasicCandidateSelector, BasicSizeEstimator, CandidateSelector, SamplingSizeEstimator, SizeEstimator}
 import org.openinfralabs.caerus.cache.common._
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.examples.spark.gridpocket.{GridPocketSchemaProvider, GridPocketTrace}
@@ -27,11 +27,12 @@ object SizeEstimatorEvaluator {
     getSupportedPlans(plan, supportTree)
   }
 
-  def main(args: Array[String]) {
+  def main(args: Array[String]): Unit = {
     // Take arguments.
-    if (args.length != 7) {
-      Console.out.println("arg length should be 7")
-      //System.exit(0)
+    if (args.length < 8) {
+      Console.err.println("Wrong number of args. Usage: <spark URI> <semantic cache URI> <year> <input path> " +
+        "<output path> <history path> <results path> <size estimator type> <size estimator args")
+      System.exit(-1)
     }
     val sparkURI: String = args(0)
     val semanticCacheURI: String = args(1)
@@ -40,6 +41,7 @@ object SizeEstimatorEvaluator {
     val outputPath: String = args(4)
     val historyPath: String = args(5)
     val resultsPath: String = args(6)
+    val sizeEstimatorType: String = args(7)
 
     // Initiate spark session.
     val spark: SparkSession =
@@ -47,6 +49,18 @@ object SizeEstimatorEvaluator {
         .master(sparkURI)
         .appName(name = "SizeEstimatorEvaluator")
         .getOrCreate()
+
+    // Create size estimator object.
+    val sizeEstimator: SizeEstimator = sizeEstimatorType match {
+      case "basic" => BasicSizeEstimator()
+      case "sampling" =>
+        val sampleSize: Int = args(8).toInt
+        SamplingSizeEstimator(spark, sampleSize)
+      case _ =>
+        Console.err.println("The %s is not recognised as a size estimator type. Supported types are basic, sampling.")
+        System.exit(-1)
+        return
+    }
 
     // Create trace.
     var id: Int = -1
@@ -65,20 +79,17 @@ object SizeEstimatorEvaluator {
     val caerusPlans: Seq[(Int, CaerusPlan)] = supportedPlans.map(supportedPlan => {
       (supportedPlan._1, SemanticCache.transform(supportedPlan._2))
     })
-    val candidates: Seq[(Int, LogicalPlan, Candidate)] =
+    val candidateInfos: Seq[(Int, Int, LogicalPlan, Candidate)] =
       caerusPlans.indices.flatMap(i => {
         candidateSelector.getCandidates(supportedPlans(i)._2, caerusPlans(i)._2).distinct.map(candidate => {
           assert(caerusPlans(i)._1 == supportedPlans(i)._1)
-          (caerusPlans(i)._1, candidate._1, candidate._2)
+          (caerusPlans(i)._1, i, candidate._1, candidate._2)
         })
       })
 
     // Calculate the estimates for all the candidates.
-    val basicSizeEstimator: SizeEstimator = BasicSizeEstimator()
-    // val samplingSizeEstimator: SizeEstimator = SamplingSizeEstimator(spark, 100)
-    candidates.foreach(candidate => {
-      basicSizeEstimator.estimateSize(candidate._2, candidate._3)
-      // samplingSizeEstimator.estimateSize(candidate._2, candidate._3)
+    candidateInfos.foreach(candidate => {
+      sizeEstimator.estimateSize(candidate._3, candidate._4)
     })
 
     // Run the candidates by using semantic cache api.
@@ -93,10 +104,11 @@ object SizeEstimatorEvaluator {
     // max "2019-02-01 00:00:00)
     val schema: StructType = new GridPocketSchemaProvider().getSchema
     val loadDF: DataFrame = spark.read.option("header", "true").schema(schema).csv(inputPath)
-    candidates.zipWithIndex.foreach(candidateInfo => {
+    candidateInfos.zipWithIndex.foreach(candidateInfo => {
       val jobID: Int = candidateInfo._1._1
-      val logicalPlan: LogicalPlan = candidateInfo._1._2
-      val candidate: Candidate = candidateInfo._1._3
+      val planID: Int = candidateInfo._1._2
+      val logicalPlan: LogicalPlan = candidateInfo._1._3
+      val candidate: Candidate = candidateInfo._1._4
       val candidateID: Int = candidateInfo._2
       val tempName: String = "temp-%d".format(candidateID)
       Console.out.println("Running candidate: %s".format(candidate))
@@ -109,7 +121,7 @@ object SizeEstimatorEvaluator {
           semanticCache.startCacheIntermediateData(logicalPlan, Tier.STORAGE_DISK, tempName)
       }
       Console.out.println(semanticCache.status)
-      jobs(jobID)._3.write.option("header","true").csv(outputPath + Path.SEPARATOR + tempName)
+      jobs(planID)._3.write.option("header","true").csv(outputPath + Path.SEPARATOR + tempName)
       semanticCache.delete(tempName)
     })
 
@@ -135,7 +147,7 @@ object SizeEstimatorEvaluator {
     }
     bufferedSource.close()
 
-    for ((_,_,candidate) <- candidates) {
+    for ((_,_,_,candidate) <- candidateInfos) {
       val Array(estimatedWrite,estimatedReadInfo) = candidate.sizeInfo.toString.split(",")
       val Array(samplingWrite, samplingReadInfo) = candidate.sizeInfo.toString.split(",")
       candidate match {

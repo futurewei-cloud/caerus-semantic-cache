@@ -79,8 +79,7 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .options(hadoopFsRelation.options)
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
-        // TODO: Create RDD with key similar to index.
-        val rdd: RDD[InternalRow] = loadDF.queryExecution.toRdd
+        val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
         val (numRecords, sketched) = sketch(rdd,sampleSize)
         // TODO: Transform sample back to DataFrame.
         val sourceSize: Long = caerusSourceLoad.size
@@ -88,13 +87,11 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
         sketched.foreach{case (idx,n,sample) =>
           val probability = (sample.length / n.toFloat)
             candidates +=  probability
-
         }
         val writeSize: Long = 1 // (candidates.sum/candidates.size * sourceSize).toLong
         val readSizeInfo: ReadSizeInfo = BasicReadSizeInfo(sourceSize / 10)
         val sizeInfo: SizeInfo = SizeInfo(writeSize, readSizeInfo)
         candidate.sizeInfo = Some(sizeInfo)
-
       case FileSkippingIndexing(caerusSourceLoad, index, _) =>
         assert(inputPlan.isInstanceOf[LogicalRelation])
         val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
@@ -105,11 +102,11 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .options(hadoopFsRelation.options)
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
-        val rdd: RDD[InternalRow] = loadDF.queryExecution.toRdd
+        val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
         val sourceSize = caerusSourceLoad.size
         val (_, sketched) = sketch(rdd,sampleSize)
-        val samples: Array[Array[InternalRow]] = sketched.map(_._3)
-        val buckets: Array[(Any,Any)] = new Array[(Any,Any)](samples.size)
+        val samples = sketched.map(_._3)
+        val buckets: Array[(Any,Any)] = new Array[(Any,Any)](samples.length)
         var i = 0
         // TODO: Find min/max values in the array. Create a bucket (min,max)
         for(sample <- samples) {
