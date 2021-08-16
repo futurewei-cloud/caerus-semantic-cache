@@ -15,6 +15,7 @@ import scala.util.hashing.MurmurHash3
 import scala.util.Random
 import scala.collection.mutable.ArrayBuffer
 import scala.math
+import scala.math.Ordering.Implicits.infixOrderingOps
 import scala.reflect.ClassTag
 
 
@@ -88,10 +89,11 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           val probability = (sample.length / n.toFloat)
             candidates +=  probability
         }
-        val writeSize: Long = 1 // (candidates.sum/candidates.size * sourceSize).toLong
+        val writeSize: Long =  (candidates.sum/candidates.size * sourceSize).toLong
         val readSizeInfo: ReadSizeInfo = BasicReadSizeInfo(sourceSize / 10)
         val sizeInfo: SizeInfo = SizeInfo(writeSize, readSizeInfo)
         candidate.sizeInfo = Some(sizeInfo)
+
       case FileSkippingIndexing(caerusSourceLoad, index, _) =>
         assert(inputPlan.isInstanceOf[LogicalRelation])
         val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
@@ -106,13 +108,13 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
         val sourceSize = caerusSourceLoad.size
         val (_, sketched) = sketch(rdd,sampleSize)
         val samples = sketched.map(_._3)
-        val buckets: Array[(Any,Any)] = new Array[(Any,Any)](samples.length)
+        val buckets: Array[(AnyRef,AnyRef)] = new Array[(AnyRef,AnyRef)](samples.length)
         var i = 0
-        // TODO: Find min/max values in the array. Create a bucket (min,max)
+        // Find min/max values in the array. Create a bucket (min,max)
         for(sample <- samples) {
-          val values: Array[Any] = sample.map(internalRow => internalRow.get(index, caerusSourceLoad.output(index).dataType))
-          val minVal = values.reduceLeft((x,y) => if (x < y) x else y)
-          val maxVal = values.reduceLeft((x,y) => if (x > y) x else y)
+          val values: Array[java.lang.Long] = sample.map(x => x.asInstanceOf)
+          val minVal = values.reduceLeft(_ min _)
+          val maxVal = values.reduceLeft(_ max _)
           buckets(i) = (minVal, maxVal)
           i = i + 1
         }

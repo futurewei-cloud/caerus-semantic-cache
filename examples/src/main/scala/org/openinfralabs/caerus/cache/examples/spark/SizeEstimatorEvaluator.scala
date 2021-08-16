@@ -114,11 +114,11 @@ object SizeEstimatorEvaluator {
       Console.out.println("Running candidate: %s".format(candidate))
       candidate match {
         case Repartitioning(_, index, _) =>
-          semanticCache.startRepartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
+          semanticCache.repartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case FileSkippingIndexing(_, index, _) =>
-          semanticCache.startFileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
+          semanticCache.fileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case Caching(_, _) =>
-          semanticCache.startCacheIntermediateData(logicalPlan, Tier.STORAGE_DISK, tempName)
+          semanticCache.cacheIntermediateData(loadDF, Tier.STORAGE_DISK, tempName)
       }
       Console.out.println(semanticCache.status)
       jobs(planID)._3.write.option("header","true").csv(outputPath + Path.SEPARATOR + tempName)
