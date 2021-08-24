@@ -3,7 +3,7 @@ package org.openinfralabs.caerus.cache.client
 import scala.util.hashing.byteswap32
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.openinfralabs.caerus.cache.common.plans.{CaerusPlan, CaerusSourceLoad}
@@ -14,7 +14,6 @@ import java.util.{Collections, Random => JavaRandom}
 import scala.util.hashing.MurmurHash3
 import scala.util.Random
 import scala.collection.mutable.ArrayBuffer
-import scala.math
 import scala.math.Ordering.Implicits.infixOrderingOps
 import scala.reflect.ClassTag
 
@@ -80,7 +79,8 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .options(hadoopFsRelation.options)
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
-        val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        //val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        val rdd: RDD[Row] = loadDF.rdd
         val (numRecords, sketched) = sketch(rdd,sampleSize)
         // TODO: Transform sample back to DataFrame.
         val sourceSize: Long = caerusSourceLoad.size
@@ -104,7 +104,8 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .options(hadoopFsRelation.options)
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
-        val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        //val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        val rdd: RDD[Row] = loadDF.rdd
         val sourceSize = caerusSourceLoad.size
         val (_, sketched) = sketch(rdd,sampleSize)
         val samples = sketched.map(_._3)
@@ -137,12 +138,13 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
   }
   private def sketch[K: ClassTag](rdd: RDD[K], sampleSize : Int) : (Long, Array[(Int,Long, Array[K])]) = {
     val shift = rdd.id
-    val sketched = rdd.mapPartitionsWithIndex ({ (idx, iter) =>
-      val seed = byteswap32(idx ^ (shift << 16))
-      val (sample, n) = reservoirSampleAndCount(
-        iter, sampleSize, seed)
-      Iterator((idx, n, sample))
-    }).collect()
+    val sketched = rdd.mapPartitionsWithIndex { (idx, iter) => {
+        val seed = byteswap32(idx ^ (shift << 16))
+        val (sample, n) = reservoirSampleAndCount(
+          iter, sampleSize, seed)
+        Iterator((idx, n, sample))
+      }
+    }.collect()
     val numItems = sketched.map(_._2).sum
     (numItems, sketched)
   }

@@ -6,7 +6,7 @@ import org.openinfralabs.caerus.cache.common.Candidate
 /**
  * Size estimator for Caerus Plans.
  */
-abstract class SizeEstimator {
+abstract class SizeEstimator extends Serializable{
   /**
    * Estimate and update read and write sizes for specific candidate.
    * @param inputPlan Plan from which candidate is derived.

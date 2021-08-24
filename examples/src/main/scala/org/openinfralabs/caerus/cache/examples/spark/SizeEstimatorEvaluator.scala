@@ -1,6 +1,7 @@
 package org.openinfralabs.caerus.cache.examples.spark
 
 import org.apache.hadoop.fs.Path
+import org.apache.spark.SparkContext
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -49,6 +50,7 @@ object SizeEstimatorEvaluator {
         .master(sparkURI)
         .appName(name = "SizeEstimatorEvaluator")
         .getOrCreate()
+
 
     // Create size estimator object.
     val sizeEstimator: SizeEstimator = sizeEstimatorType match {
