@@ -367,7 +367,7 @@ class SemanticCache(
     heartbeatThread.interrupt()
   }
 
-  private[SemanticCache] def startRepartitioning(
+  private[cache] def startRepartitioning(
     loadDF: DataFrame,
     partitionAttribute: String,
     tier: Tier,
@@ -481,7 +481,7 @@ class SemanticCache(
     startRepartitioning(loadDF, partitionAttribute, tier, name)
   }
 
-  private[SemanticCache] def startFileSkippingIndexing(
+  private[cache] def startFileSkippingIndexing(
     loadDF: DataFrame,
     indexedAttribute: String,
     tier: Tier,
@@ -612,7 +612,7 @@ class SemanticCache(
     startFileSkippingIndexing(loadDF, indexedAttribute, tier, name)
   }
 
-  private[SemanticCache] def startCacheIntermediateData(logicalPlan: LogicalPlan, tier: Tier, name: String): Long = {
+  private[cache] def startCacheIntermediateData(logicalPlan: LogicalPlan, tier: Tier, name: String): Long = {
     val beginTime: Long = System.nanoTime()
 
     // Transform logical plan to CaerusPlan.

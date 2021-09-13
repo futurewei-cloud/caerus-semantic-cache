@@ -2,6 +2,7 @@ package org.openinfralabs.caerus.cache.client
 
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, LogicalPlan, Project, UnaryNode}
+import org.apache.spark.sql.execution.datasources.LogicalRelation
 import org.apache.spark.sql.types._
 import org.openinfralabs.caerus.cache.common.plans.{CaerusPlan, CaerusSourceLoad}
 import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, Repartitioning}
@@ -34,6 +35,8 @@ case class BasicCandidateSelector() extends CandidateSelector {
     }
   }
 
+  private def isSupported(attribute: Attribute): Boolean = isNumeric(attribute) || isDate(attribute)
+
   private def getCandidates(
     inputPlan: LogicalPlan,
     plan: CaerusPlan,
@@ -52,29 +55,38 @@ case class BasicCandidateSelector() extends CandidateSelector {
             .flatMap(attributeToIndex(caerusSourceLoad, _))
             .map(index => FileSkippingIndexing(caerusSourceLoad, index))
             .map(candidate => (inputPlan, candidate))
-        (inputPlan, Caching(caerusSourceLoad)) +: (repartitionCandidates ++ fileSkippingIndexingCandidates)
-      case aggr: Aggregate =>
+        assert(inputPlan.isInstanceOf[LogicalRelation])
+        val cachingCandidate: (LogicalPlan,Candidate) = (inputPlan, Caching(caerusSourceLoad))
+        cachingCandidate +: (repartitionCandidates ++ fileSkippingIndexingCandidates)
+      case aggregate: Aggregate =>
         val newShuffleAttributes: Seq[Attribute] =
-          aggr.groupingExpressions.flatMap(_.references.toSeq).filter(attrib => isNumeric(attrib) || isDate(attrib))
+          aggregate
+            .groupingExpressions
+            .flatMap(_.references.toSeq)
+            .filter(attribute => isSupported(attribute))
         assert(inputPlan.isInstanceOf[Aggregate])
         val newInputPlan: LogicalPlan = inputPlan.asInstanceOf[Aggregate].child
-        (inputPlan, Caching(plan)) +:
-          getCandidates(newInputPlan, aggr.child, Seq.empty[Attribute], newShuffleAttributes)
+        val cachingCandidate: (LogicalPlan,Candidate) = (inputPlan, Caching(aggregate))
+        cachingCandidate +: getCandidates(newInputPlan, aggregate.child, Seq.empty[Attribute], newShuffleAttributes)
       case filter: Filter =>
-        val newFilterAttributes: Seq[Attribute] =
-          filter.expressions.flatMap(_.references.toSeq).filter(attrib => isNumeric(attrib) || isDate(attrib))
+        val newFilterAttributes: Seq[Attribute] = filterAttributes ++
+          filter
+            .expressions
+            .flatMap(_.references.toSeq)
+            .filter(attribute => isSupported(attribute))
         assert(inputPlan.isInstanceOf[Filter])
         val newInputPlan: LogicalPlan = inputPlan.asInstanceOf[Filter].child
-        (inputPlan, Caching(plan)) +:
-          getCandidates(newInputPlan, filter.child, filterAttributes ++ newFilterAttributes, shuffleAttributes)
+        val cachingCandidate: (LogicalPlan,Candidate) = (inputPlan, Caching(filter))
+        cachingCandidate +: getCandidates(newInputPlan, filter.child, newFilterAttributes, shuffleAttributes)
       case project: Project =>
         assert(inputPlan.isInstanceOf[Project])
         val newInputPlan: LogicalPlan = inputPlan.asInstanceOf[Project].child
-        (inputPlan, Caching(plan)) +: getCandidates(newInputPlan, project.child, filterAttributes, shuffleAttributes)
-      case _: UnaryNode =>
+        val cachingCandidate: (LogicalPlan,Candidate) = (inputPlan, Caching(project))
+        cachingCandidate +: getCandidates(newInputPlan, project.child, filterAttributes, shuffleAttributes)
+      case unary: UnaryNode =>
         assert(inputPlan.isInstanceOf[UnaryNode])
         val newInputPlan: LogicalPlan = inputPlan.asInstanceOf[UnaryNode].child
-        getCandidates(newInputPlan, plan.asInstanceOf[UnaryNode].child, filterAttributes, shuffleAttributes)
+        getCandidates(newInputPlan, unary.child, filterAttributes, shuffleAttributes)
       case _ =>
         assert(inputPlan.children.length == plan.children.length)
         plan.children.indices.flatMap(i =>

@@ -88,9 +88,12 @@ object SizeEstimatorEvaluator {
       })
 
     // Calculate the estimates for all the candidates.
-    candidateInfos.foreach(candidate => {
-      sizeEstimator.estimateSize(candidate._3, candidate._4)
+    val candidates: Seq[Candidate] = candidateInfos.map(_._4).distinct.slice(0,10)
+    candidates.foreach(candidate => {
+      val candidatePlan: LogicalPlan = candidateInfos.filter(_._4 == candidate).head._3
+      sizeEstimator.estimateSize(candidatePlan, candidate)
     })
+    Console.out.println("Candidates with Sizes:\n%s".format(candidates.mkString("\n")))
 
     // Run the candidates by using semantic cache api.
     if (semanticCacheURI == "none") {
@@ -104,14 +107,14 @@ object SizeEstimatorEvaluator {
     // max "2019-02-01 00:00:00)
     val schema: StructType = new GridPocketSchemaProvider().getSchema
     val loadDF: DataFrame = spark.read.option("header", "true").schema(schema).csv(inputPath)
-    candidateInfos.zipWithIndex.foreach(candidateInfo => {
-      val jobID: Int = candidateInfo._1._1
-      val planID: Int = candidateInfo._1._2
-      val logicalPlan: LogicalPlan = candidateInfo._1._3
-      val candidate: Candidate = candidateInfo._1._4
-      val candidateID: Int = candidateInfo._2
-      val tempName: String = "temp-%d".format(candidateID)
-      Console.out.println("Running candidate: %s".format(candidate))
+    val readEstimates: Seq[Long] = candidates.indices.map(i => {
+      val candidate: Candidate = candidates(i)
+      val candidateInfo: (Int, Int, LogicalPlan, Candidate) = candidateInfos.filter(_._4 == candidate).head
+      val jobID: Int = candidateInfo._1
+      val planID: Int = candidateInfo._2
+      val logicalPlan: LogicalPlan = candidateInfo._3
+      val tempName: String = "temp-%d".format(i)
+      Console.out.println("Running candidate %s ...".format(candidate))
       candidate match {
         case Repartitioning(_, index, _) =>
           semanticCache.startRepartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
@@ -119,13 +122,17 @@ object SizeEstimatorEvaluator {
           semanticCache.startFileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case Caching(_, _) =>
           semanticCache.startCacheIntermediateData(logicalPlan, Tier.STORAGE_DISK, tempName)
+        case _ =>
+          throw new RuntimeException("Candidate %s is not supported.".format(candidate))
       }
-      Console.out.println(semanticCache.status)
-      jobs(planID)._3.write.option("header","true").csv(outputPath + Path.SEPARATOR + tempName)
+      Console.out.println("Semantic Cache Status:\n%s".format(semanticCache.status))
+      jobs(jobID)._3.write.option("header","true").csv(outputPath + Path.SEPARATOR + tempName)
+      Console.out.println("Deleting candidate %s ...".format(candidate))
       semanticCache.delete(tempName)
+      candidate.sizeInfo.get.readSizeInfo.getSize(FilterInfo.get(caerusPlans(planID)._2, candidate))
     })
 
-    // Write results
+    // Get Spark application ID.
     val applicationId = spark.sparkContext.applicationId
     spark.stop
 
@@ -142,23 +149,14 @@ object SizeEstimatorEvaluator {
 
     val result = ArrayBuffer[Array[String]]()
     val bufferedSource = fromFile(resultsPath)
-    for (line <- bufferedSource.getLines()) {
+    for (line <- bufferedSource.getLines())
       result += line.split(",").map(_.trim)
-    }
     bufferedSource.close()
 
-    for ((_,_,_,candidate) <- candidateInfos) {
-      val Array(estimatedWrite,estimatedReadInfo) = candidate.sizeInfo.toString.split(",")
-      val Array(samplingWrite, samplingReadInfo) = candidate.sizeInfo.toString.split(",")
-      candidate match {
-        case Repartitioning(_,_,_) =>
-          Console.out.println("EstimatedWrite: %s%s, ActualWrite: %s, EstimatedRead: %s%s, ActualRead: %s".format(
-            estimatedWrite,samplingWrite,result(0)(4),estimatedReadInfo,samplingReadInfo,result(1)(3)))
-        case FileSkippingIndexing(_,_,_) =>
-          Console.out.println("EstimatedWrite: %s%s, ActualWrite: %s, EstimatedRead: %s%s, ActualRead: %s".format(
-            estimatedWrite,samplingWrite,result(2)(4),estimatedReadInfo,samplingReadInfo,result(3)(3)))
-        case Caching(_, _) =>
-      }
+    for (i <- candidates.indices) {
+      val estimatedWrite: Long = candidates(i).sizeInfo.get.writeSize
+      val estimatedRead: Long = readEstimates(i)
+      Console.out.println("%s,%s,%s,%s".format(estimatedWrite,result(2*i)(4),estimatedRead,result(2*i+1)(3)))
     }
   }
 }

@@ -26,8 +26,8 @@ case class BasicSizeEstimator() extends SizeEstimator {
   /**
    * Estimate and update read and write sizes for specific candidate. The prediction is based on spark estimation
    * predictions and some simple hypothesis made for the read sizes.
-   *
-   * @param candidate Candidate to estimate and update sizes for.
+   * @param inputPlan Plan from which candidate is derived.
+   * @param candidate Candidates to estimate and update sizes for.
    */
   override def estimateSize(inputPlan: LogicalPlan, candidate: Candidate): Unit = {
     candidate match {

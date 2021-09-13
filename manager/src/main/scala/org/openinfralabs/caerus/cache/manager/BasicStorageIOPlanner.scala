@@ -3,7 +3,7 @@ package org.openinfralabs.caerus.cache.manager
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.plans.logical.{Filter, Project}
 import org.openinfralabs.caerus.cache.common.plans._
-import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, Repartitioning}
+import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, FilterInfo, Repartitioning}
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.collection.mutable
@@ -13,7 +13,7 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor, pat
 
   private def emptyAddReference(path: String): Unit = {}
 
-  private def addReference(references: mutable.HashMap[String,Long]): String => Unit = {
+  private def addReference(references: mutable.HashMap[ String, Long ]): String => Unit = {
     path => {
       if (references.contains(path))
         references(path) += 1
@@ -22,40 +22,28 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor, pat
     }
   }
 
-  private def calculateSourceStorageIOCost(plan: CaerusPlan): Long = {
-    var cost: Long = 0L
+  private def calculateStorageIOCost(
+    contents: Map[Candidate,String],
+    plan: CaerusPlan,
+    originalPlan: CaerusPlan
+  ): Long =
     plan match {
       case caerusSourceLoad: CaerusSourceLoad =>
-        cost += caerusSourceLoad.sources.map(source => source.length).sum
+        caerusSourceLoad.sources.map(source => source.length).sum
+      case caerusCacheLoad: CaerusCacheLoad =>
+        caerusCacheLoad.sources.map(source => {
+          val candidate: Candidate = contents.filter(_._2 == source).head._1
+          candidate.sizeInfo.get.readSizeInfo.getSize(FilterInfo.get(originalPlan, candidate))
+        }).sum
       case _ =>
-        plan.children.foreach(child => cost += calculateSourceStorageIOCost(child))
-    }
-    cost
-  }
-
-  private def calculateCacheStorageIOCost(
-    contents: Map[Candidate,String],
-    references: Map[String,Long]
-  ): Long = {
-    var cost: Long = 0L
-    contents.keys.foreach(candidate => {
-      val path: String = contents(candidate)
-      if (references.contains(path)) {
-        val numRefs: Long = references(path)
-        // TODO: This needs to change according to what filters are issued after this load.
-        cost += numRefs * candidate.sizeInfo.get.readSizeInfo.getSize(0,0)
-      }
-    })
-    cost
+        plan.children.map(child => calculateStorageIOCost(contents, child, originalPlan)).sum
   }
 
   private def findCost(contents: Map[Candidate,String], plans: Seq[CaerusPlan]): Long = {
-    val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
-    val storageSourceIOCost: Long = plans.zipWithIndex.map(plan => {
-      val optimizedPlan: CaerusPlan = optimizer.optimize(plan, contents, addReference(tempReferences))
-      calculateSourceStorageIOCost(optimizedPlan)
+    plans.map(plan => {
+      val optimizedPlan: CaerusPlan = optimizer.optimize(plan, contents, emptyAddReference)
+      calculateStorageIOCost(contents, optimizedPlan, plan)
     }).sum
-    storageSourceIOCost + calculateCacheStorageIOCost(contents, tempReferences.toMap)
   }
 
   private def findSourceReadSize(contents: Map[Candidate,String], candidate: Candidate): Long = {

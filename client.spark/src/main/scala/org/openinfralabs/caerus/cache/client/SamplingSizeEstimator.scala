@@ -1,22 +1,16 @@
 package org.openinfralabs.caerus.cache.client
 
-import scala.util.hashing.byteswap32
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.openinfralabs.caerus.cache.common._
 import org.openinfralabs.caerus.cache.common.plans.{CaerusPlan, CaerusSourceLoad}
-import org.openinfralabs.caerus.cache.common.{BasicReadSizeInfo, BucketedReadSizeInfo, Caching, Candidate, FileSkippingIndexing, ReadSizeInfo, Repartitioning, SizeInfo}
 
 import java.nio.ByteBuffer
-import java.util.{Collections, Random => JavaRandom}
+import java.util.{Random => JavaRandom}
 import scala.util.hashing.MurmurHash3
-import scala.util.Random
-import scala.collection.mutable.ArrayBuffer
-import scala.math
-import scala.reflect.ClassTag
-
 
 /**
  * Size estimator for Spark's Semantic Cache Client. SamplingSizeEstimator should create relatively small samples based
@@ -63,11 +57,12 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
   }
 
   /**
-   * Estimate and update read and write sizes for specific candidate.
-   *
-   * @param candidate Candidate to estimate and updates sizes for.
+   * Estimate and update read and write sizes for specific candidate. The estimation is based on sampling.
+   * @param inputPlan Plan from which candidate is derived.
+   * @param candidate Candidates to estimate and update sizes for.
    */
   override def estimateSize(inputPlan: LogicalPlan, candidate: Candidate): Unit = {
+    /*
     candidate match {
       case Repartitioning(caerusSourceLoad, index, _) =>
         assert(inputPlan.isInstanceOf[LogicalRelation])
@@ -110,9 +105,8 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
         var i = 0
         // TODO: Find min/max values in the array. Create a bucket (min,max)
         for(sample <- samples) {
-          val values: Array[Any] = sample.map(internalRow => internalRow.get(index, caerusSourceLoad.output(index).dataType))
-          val minVal = values.reduceLeft((x,y) => if (x < y) x else y)
-          val maxVal = values.reduceLeft((x,y) => if (x > y) x else y)
+          val minVal = 0
+          val maxVal = 0
           buckets(i) = (minVal, maxVal)
           i = i + 1
         }
@@ -186,6 +180,7 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
       }
       (reservoir, i)
     }
+     */
   }
 
 

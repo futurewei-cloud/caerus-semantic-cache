@@ -10,7 +10,7 @@ abstract class SizeEstimator {
   /**
    * Estimate and update read and write sizes for specific candidate.
    * @param inputPlan Plan from which candidate is derived.
-   * @param candidate Candidate to estimate and updates sizes for.
+   * @param candidate Candidate to estimate and update sizes for.
    */
   def estimateSize(inputPlan: LogicalPlan, candidate: Candidate): Unit
 }

@@ -1,17 +1,15 @@
 package org.openinfralabs.caerus.cache.common
 
 import scala.language.higherKinds
-import scala.math.Ordered.orderingToOrdered
 
 case class BucketedReadSizeInfo(buckets: Array[(AnyRef,AnyRef)], initialSize: Long) extends ReadSizeInfo {
-  override def getSize[T: Ordering](minValue: T, maxValue: T): Long = {
+  override def getSize(orderingIntervals: Seq[OrderingInterval[Any]]): Long = {
     var nrBucketsUtilized: Int = 0
     buckets.foreach(bucket => {
-      val minV = bucket._1.asInstanceOf[T]
-      val maxV = bucket._2.asInstanceOf[T]
-      if ((minV < maxValue) && (maxV >= minValue)) {
+      val minV = bucket._1
+      val maxV = bucket._2
+      if (orderingIntervals.flatMap(_.intersect(minV, maxV)).nonEmpty)
         nrBucketsUtilized += 1
-      }
     })
     initialSize*nrBucketsUtilized/buckets.length
   }

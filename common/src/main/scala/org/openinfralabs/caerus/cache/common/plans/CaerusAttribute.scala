@@ -4,16 +4,23 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, ExprId, Expression,
 import org.apache.spark.sql.types.{DataType, Metadata}
 
 case class CaerusAttribute(index: Int, dataType: DataType) extends Attribute with Unevaluable {
-  override def withNullability(newNullability: Boolean): Attribute = this
-  override def withQualifier(newQualifier: Seq[String]): Attribute = this
-  override def withName(newName: String): Attribute = this
-  override def withMetadata(newMetadata: Metadata): Attribute = this
-  override def withExprId(newExprId: ExprId): Attribute = this
-  override def newInstance(): Attribute = CaerusAttribute(index, dataType)
+  override def newInstance(): CaerusAttribute = CaerusAttribute(index, dataType)
+  override def withNullability(newNullability: Boolean): CaerusAttribute = this
+  override def withName(newName: String): CaerusAttribute = this
+  override def withQualifier(newQualifier: Seq[String]): CaerusAttribute = this
+  override def withExprId(newExprId: ExprId): CaerusAttribute = this
+  override def withMetadata(newMetadata: Metadata): CaerusAttribute = this
   override def name: String = "none"
   override def exprId: ExprId = ExprId(index.toLong)
   override def qualifier: Seq[String] = Seq.empty[String]
   override def nullable: Boolean = true
+
+  def withIndex(newIndex: Int): CaerusAttribute = {
+    if (newIndex == index)
+      this
+    else
+      CaerusAttribute(newIndex, dataType)
+  }
 
   def sameRef(other: CaerusAttribute): Boolean = index == other.index
 

@@ -1,8 +1,7 @@
 package org.openinfralabs.caerus.cache.common
 
 abstract class ReadSizeInfo {
-  // TODO: Replace min/max estimation with distinct ranges.
-  def getSize[T: Ordering](minValue: T, maxValue: T): Long
+  def getSize(orderingInterval: Seq[OrderingInterval[Any]]): Long
 
   def toJSON: String = {
     val caerusPlanSerDe = new CaerusPlanSerDe
