@@ -50,6 +50,7 @@ object SizeEstimatorEvaluator {
         .appName(name = "SizeEstimatorEvaluator")
         .getOrCreate()
 
+
     // Create size estimator object.
     val sizeEstimator: SizeEstimator = sizeEstimatorType match {
       case "basic" => BasicSizeEstimator()
@@ -117,9 +118,9 @@ object SizeEstimatorEvaluator {
       Console.out.println("Running candidate %s ...".format(candidate))
       candidate match {
         case Repartitioning(_, index, _) =>
-          semanticCache.startRepartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
+          semanticCache.repartitioning(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case FileSkippingIndexing(_, index, _) =>
-          semanticCache.startFileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
+          semanticCache.fileSkippingIndexing(loadDF, loadDF.columns(index), Tier.STORAGE_DISK, tempName)
         case Caching(_, _) =>
           semanticCache.startCacheIntermediateData(logicalPlan, Tier.STORAGE_DISK, tempName)
         case _ =>

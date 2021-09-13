@@ -2,6 +2,7 @@ package org.openinfralabs.caerus.cache.client
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -74,7 +75,8 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .options(hadoopFsRelation.options)
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
-        val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        //val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        val rdd: RDD[Row] = loadDF.rdd
         val (numRecords, sketched) = sketch(rdd,sampleSize)
         // TODO: Transform sample back to DataFrame.
         val sourceSize: Long = caerusSourceLoad.size
@@ -83,10 +85,11 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           val probability = (sample.length / n.toFloat)
             candidates +=  probability
         }
-        val writeSize: Long = 1 // (candidates.sum/candidates.size * sourceSize).toLong
+        val writeSize: Long =  (candidates.sum/candidates.size * sourceSize).toLong
         val readSizeInfo: ReadSizeInfo = BasicReadSizeInfo(sourceSize / 10)
         val sizeInfo: SizeInfo = SizeInfo(writeSize, readSizeInfo)
         candidate.sizeInfo = Some(sizeInfo)
+
       case FileSkippingIndexing(caerusSourceLoad, index, _) =>
         assert(inputPlan.isInstanceOf[LogicalRelation])
         val logicalRelation: LogicalRelation = inputPlan.asInstanceOf[LogicalRelation]
@@ -97,16 +100,18 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
           .options(hadoopFsRelation.options)
           .schema(hadoopFsRelation.dataSchema)
           .load(caerusSourceLoad.sources.map(source => source.path):_*)
-        val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        //val rdd = loadDF.queryExecution.toRdd.map(x => x.get(index, logicalRelation.output(index).dataType))
+        val rdd: RDD[Row] = loadDF.rdd
         val sourceSize = caerusSourceLoad.size
         val (_, sketched) = sketch(rdd,sampleSize)
         val samples = sketched.map(_._3)
-        val buckets: Array[(Any,Any)] = new Array[(Any,Any)](samples.length)
+        val buckets: Array[(AnyRef,AnyRef)] = new Array[(AnyRef,AnyRef)](samples.length)
         var i = 0
-        // TODO: Find min/max values in the array. Create a bucket (min,max)
+        // Find min/max values in the array. Create a bucket (min,max)
         for(sample <- samples) {
-          val minVal = 0
-          val maxVal = 0
+          val values: Array[java.lang.Long] = sample.map(x => x.asInstanceOf)
+          val minVal = values.reduceLeft(_ min _)
+          val maxVal = values.reduceLeft(_ max _)
           buckets(i) = (minVal, maxVal)
           i = i + 1
         }
@@ -129,12 +134,13 @@ case class SamplingSizeEstimator(spark: SparkSession, sampleSize: Int) extends S
   }
   private def sketch[K: ClassTag](rdd: RDD[K], sampleSize : Int) : (Long, Array[(Int,Long, Array[K])]) = {
     val shift = rdd.id
-    val sketched = rdd.mapPartitionsWithIndex ({ (idx, iter) =>
-      val seed = byteswap32(idx ^ (shift << 16))
-      val (sample, n) = reservoirSampleAndCount(
-        iter, sampleSize, seed)
-      Iterator((idx, n, sample))
-    }).collect()
+    val sketched = rdd.mapPartitionsWithIndex { (idx, iter) => {
+        val seed = byteswap32(idx ^ (shift << 16))
+        val (sample, n) = reservoirSampleAndCount(
+          iter, sampleSize, seed)
+        Iterator((idx, n, sample))
+      }
+    }.collect()
     val numItems = sketched.map(_._2).sum
     (numItems, sketched)
   }
