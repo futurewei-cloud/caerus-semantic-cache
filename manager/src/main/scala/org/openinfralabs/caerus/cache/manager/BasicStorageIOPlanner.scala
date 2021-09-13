@@ -31,6 +31,7 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor, pat
       case caerusSourceLoad: CaerusSourceLoad =>
         caerusSourceLoad.sources.map(source => source.length).sum
       case caerusCacheLoad: CaerusCacheLoad =>
+        // TODO: If Tier is COMPUTE_X return 0 else return the following:
         caerusCacheLoad.sources.map(source => {
           val candidate: Candidate = contents.filter(_._2 == source).head._1
           candidate.sizeInfo.get.readSizeInfo.getSize(FilterInfo.get(originalPlan, candidate))

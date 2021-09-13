@@ -157,7 +157,12 @@ object SizeEstimatorEvaluator {
     for (i <- candidates.indices) {
       val estimatedWrite: Long = candidates(i).sizeInfo.get.writeSize
       val estimatedRead: Long = readEstimates(i)
-      Console.out.println("%s,%s,%s,%s".format(estimatedWrite,result(2*i)(4),estimatedRead,result(2*i+1)(3)))
+      candidates(i) match {
+        case _: Repartitioning =>
+          Console.out.println("R,%s,%s,%s,%s".format(estimatedWrite, result(2*i)(4), estimatedRead, result(2*i+1)(3)))
+        case _: FileSkippingIndexing =>
+
+      }
     }
   }
 }

@@ -26,6 +26,16 @@ private[manager] abstract class Planner {
     plan: CaerusPlan,
     contents: Map[Candidate,String],
     candidates: Seq[Candidate],
-    capacity: Long,
+    capacity: Long
   ): CaerusPlan
+
+  // TODO: Change the optimize API.
+  /*
+  def optimize(
+    plan: CaerusPlan,
+    contents: Map[Candidate,String],
+    candidates: Seq[Candidate],
+    capacity: Long
+  ): Map[Candidate,String]
+  */
 }

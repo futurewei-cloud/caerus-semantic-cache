@@ -80,11 +80,13 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
 
   private var pathId: Long = 0L
   private val names: mutable.HashMap[String, Candidate] = mutable.HashMap.empty[String, Candidate]
-  private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
+  // TODO: Change contents to be a map of maps with tier as the root key.
+  private val contents: Map[Tier, mutable.HashMap[Candidate,String]] = mutable.HashMap.empty[Candidate,String]
   private val reservations: mutable.HashMap[(String,Candidate),String] =
     mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
   private val optimizer: Optimizer = UnifiedOptimizer()
+  // TODO: Only seek configuration when in mode 3 for predictor and planner.
   private val predictorConfStr: String = "predictor"
   private val windowSize: Int = conf.getInt(predictorConfStr + ".windowSize")
   private val predictor: Predictor = conf.getString(predictorConfStr + ".type") match {
@@ -98,6 +100,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       logger.info("Reverse order predictor with limit : %s".format(windowSize))
       ReverseOrderPredictor(windowSize)
   }
+  // TODO: Delete output path and remove it from the planner initialization.
   private val outputPath: String = {
     if (tiers.contains(Tier.STORAGE_DISK))
       tiers(Tier.STORAGE_DISK)
@@ -105,6 +108,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       "none"
   }
   private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
+
+
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
@@ -353,7 +358,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       val tier: Tier = getTierFromPath(request.path)
-      capacity(tier) -= request.realSize
+      capacity(tier) += request.realSize
       logger.info("Free:%s\tReleased size: %s\tCorrected Capacity: %s."
         .format(request.path, request.realSize, capacity(tier)))
       Future.successful(Ack())
@@ -408,18 +413,30 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             path => addReference(request.clientId, path)
           )
         } else if (operationMode == Mode.FULLY_AUTOMATIC) {
+          // TODO: Call iteratively for all tiers that are configured.
           val cap: Long = {
             if (lastTier.isDefined)
               capacity(lastTier.get)
             else
               0L
           }
+          // val newContents: Map[Candidate, String] =
           planner.optimize(
             caerusPlan,
             availableContents.toMap[Candidate,String],
             request.candidates.map(Candidate.fromJSON),
             cap
           )
+          // TODO: For now we only delete content when we evict. Later we need to migrate to bottom layers as well.
+          // TODO: Find difference newContents - oldContents (at most 1).
+          // newContents.keySet - availableContents.toMap[Candidate,String].keySet
+          // If it is one.
+            // Construct write.
+            // Find the difference oldContents - newContents
+            // availableContents.toMap[Candidate,String].keySet - newContents.keySet
+            // If it is more than zero, need construct eviction
+            // Return the appropriate plan.
+          // Continue the iteration.
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)
