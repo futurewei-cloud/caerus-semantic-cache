@@ -1,0 +1,431 @@
+Using Scala version 2.12.10 (OpenJDK 64-Bit Server VM, Java 11.0.11)
+Type in expressions to have them evaluated.
+Type :help for more information.
+
+scala> import org.apache.spark.sql.expressions.{Window, WindowSpec}
+import org.apache.spark.sql.expressions.{Window, WindowSpec}
+
+scala> import org.apache.spark.sql.functions.{col, lag, lit, when}
+import org.apache.spark.sql.functions.{col, lag, lit, when}
+
+scala> import org.apache.spark.sql.types._
+import org.apache.spark.sql.types._
+
+scala> import org.apache.spark.sql.{Column, DataFrame, SparkSession, functions}
+import org.apache.spark.sql.{Column, DataFrame, SparkSession, functions}
+
+scala>
+
+scala> import java.util.Calendar
+import java.util.Calendar
+
+scala> import org.apache.spark.sql.types._
+import org.apache.spark.sql.types._
+
+scala> import org.openinfralabs.caerus.cache.examples.spark.SchemaProvider
+import org.openinfralabs.caerus.cache.examples.spark.SchemaProvider
+
+scala> import org.openinfralabs.caerus.cache.common.Mode.Mode
+import org.openinfralabs.caerus.cache.common.Mode.Mode
+
+scala> import org.openinfralabs.caerus.cache.common.Tier.Tier
+import org.openinfralabs.caerus.cache.common.Tier.Tier
+
+scala> import org.openinfralabs.caerus.cache.common._
+import org.openinfralabs.caerus.cache.common._
+
+scala> import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
+import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
+
+scala> import org.openinfralabs.caerus.cache.grpc.service._
+import org.openinfralabs.caerus.cache.grpc.service._
+
+scala> import org.openinfralabs.caerus.cache.client.spark.SemanticCache
+import org.openinfralabs.caerus.cache.client.spark.SemanticCache
+
+scala>
+
+scala>
+
+scala> class GridPocketSchemaProvider extends SchemaProvider {
+     |   /**
+     |    * Function that calculates Spark schema for GridPocket queries.
+     |    * @return corresponding schema information for Spark (StructType)
+     |    */
+     |   def getSchema: StructType = StructType(Array(
+     |     StructField("vid", StringType, nullable=true),
+     |     StructField("date", TimestampType, nullable=true),
+     |     StructField("index", DoubleType, nullable=true),
+     |     StructField("sumHC", DoubleType, nullable=true),
+     |     StructField("sumHP", DoubleType, nullable=true),
+     |     StructField("type", StringType, nullable=true),
+     |     StructField("size", IntegerType, nullable=true),
+     |     StructField("temp", DoubleType, nullable=true),
+     |     StructField("city", StringType, nullable=true),
+     |     StructField("region", StringType, nullable=true),
+     |     StructField("lat", DoubleType, nullable=true),
+     |     StructField("lng", DoubleType, nullable=true)
+     |   ))
+     | }
+defined class GridPocketSchemaProvider
+
+scala>
+
+scala> val year: Int = 2019
+year: Int = 2019
+
+scala> val month: Int = 10
+month: Int = 10
+
+scala> val inputPath: String="hdfs://10.124.48.39:9000/gdata/*_00001.csv"
+inputPath: String = hdfs://10.124.48.39:9000/gdata/*_00001.csv
+
+scala> val schemaProvider: GridPocketSchemaProvider = new GridPocketSchemaProvider()
+schemaProvider: GridPocketSchemaProvider = GridPocketSchemaProvider@514df93c
+
+scala> val schema: StructType = schemaProvider.getSchema
+schema: org.apache.spark.sql.types.StructType = StructType(StructField(vid,StringType,true), StructField(date,TimestampType,true), StructField(index,DoubleType,true), StructField(sumHC,DoubleType,true), StructField(sumHP,DoubleType,true), StructField(type,StringType,true), StructField(size,IntegerType,true), StructField(temp,DoubleType,true), StructField(city,StringType,true), StructField(region,StringType,true), StructField(lat,DoubleType,true), StructField(lng,DoubleType,true))
+
+scala>
+
+scala> // Create leaf node.
+
+scala> val loadDF = spark.read.schema(schema).option("header", value=true).csv(inputPath)
+loadDF: org.apache.spark.sql.DataFrame = [vid: string, date: timestamp ... 10 more fields]
+
+scala> SemanticCache.activate(spark, "10.124.48.39:35001")
+
+scala>
+
+scala>
+
+scala> val cal: Calendar = Calendar.getInstance()
+cal: java.util.Calendar = java.util.GregorianCalendar[time=1631885104079,areFieldsSet=true,areAllFieldsSet=true,lenient=true,zone=sun.util.calendar.ZoneInfo[id="America/New_York",offset=-18000000,dstSavings=3600000,useDaylight=true,transitions=235,lastRule=java.util.SimpleTimeZone[id=America/New_York,offset=-18000000,dstSavings=3600000,useDaylight=true,startYear=0,startMode=3,startMonth=2,startDay=8,startDayOfWeek=1,startTime=7200000,startTimeMode=0,endMode=3,endMonth=10,endDay=1,endDayOfWeek=1,endTime=7200000,endTimeMode=0]],firstDayOfWeek=1,minimalDaysInFirstWeek=1,ERA=1,YEAR=2021,MONTH=8,WEEK_OF_YEAR=38,WEEK_OF_MONTH=3,DAY_OF_MONTH=17,DAY_OF_YEAR=260,DAY_OF_WEEK=6,DAY_OF_WEEK_IN_MONTH=3,AM_PM=0,HOUR=9,HOUR_OF_DAY=9,MINUTE=25,SECOND=4,MILLISECOND=79,ZONE_OFFS...
+
+scala> cal.set(year, month-1, 1, 0, 0, 0)
+
+scala> cal.add(Calendar.MONTH, -1)
+
+scala> val minDate: String = "%04d-%02d-01 00:00:00".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+minDate: String = 2019-09-01 00:00:00
+
+scala> cal.add(Calendar.MONTH, 2)
+
+scala> val maxDate: String = "%04d-%02d-01 00:00:00".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+maxDate: String = 2019-11-01 00:00:00
+
+scala> cal.add(Calendar.MONTH, -1)
+
+scala> val curMonth: String = "%04d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+curMonth: String = 2019-10
+
+scala> val windowSpec: WindowSpec = Window.partitionBy("vid").orderBy("month")
+windowSpec: org.apache.spark.sql.expressions.WindowSpec = org.apache.spark.sql.expressions.WindowSpec@1f26bd2a
+
+scala> val prevIndex: Column = lag("index",1) over windowSpec
+prevIndex: org.apache.spark.sql.Column = lag(index, 1, NULL) OVER (PARTITION BY vid ORDER BY month ASC NULLS FIRST unspecifiedframe$())
+
+scala> val curIndex: Column = col("index")
+curIndex: org.apache.spark.sql.Column = index
+
+scala> loadDF
+res5: org.apache.spark.sql.DataFrame = [vid: string, date: timestamp ... 10 more fields]
+
+scala>   .filter(col("date") >= lit(minDate) and col("date") < lit(maxDate))
+res6: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [vid: string, date: timestamp ... 10 more fields]
+
+scala>   .groupBy(functions.substring(col("date"), pos=0, len=7).as("month"), col("vid"))
+res7: org.apache.spark.sql.RelationalGroupedDataset = RelationalGroupedDataset: [grouping expressions: [month, vid], value: [vid: string, date: timestamp ... 10 more fields], type: ]
+
+scala>   .agg(
+     |     functions.max(col("index")).as("index"),
+     |     functions.first(col("lat")).as("lat"),
+     |     functions.first(col("lng")).as("lng"),
+     |     functions.first(col("region")).as("region")
+     |   )
+res8: org.apache.spark.sql.DataFrame = [month: string, vid: string ... 4 more fields]
+
+scala>   .withColumn("cons", when(prevIndex.isNull, curIndex).otherwise(curIndex-prevIndex))
+res9: org.apache.spark.sql.DataFrame = [month: string, vid: string ... 5 more fields]
+
+scala>   .filter(col("month") === curMonth)
+res10: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [month: string, vid: string ... 5 more fields]
+
+scala>   .select(col("month"), col("vid"), col("cons"), col("lat"), col("lng"), col("region"))
+res11: org.apache.spark.sql.DataFrame = [month: string, vid: string ... 4 more fields]
+
+scala>   .orderBy(col("vid"))
+res12: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [month: string, vid: string ... 4 more fields]
+
+scala>
+
+scala>
+
+scala> res12.explain
+== Physical Plan ==
+*(5) Sort [vid#0 ASC NULLS FIRST], true, 0
++- Exchange rangepartitioning(vid#0 ASC NULLS FIRST, 200), true, [id=#65]
+   +- *(4) Project [month#24, vid#0, CASE WHEN isnull(_we0#52) THEN index#38 ELSE (index#38 - _we1#53) END AS cons#51, lat#40, lng#42, region#44]
+      +- *(4) Filter (isnotnull(month#24) AND (month#24 = 2019-10))
+         +- Window [lag(index#38, 1, null) windowspecdefinition(vid#0, month#24 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we0#52, lag(index#38, 1, null) windowspecdefinition(vid#0, month#24 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we1#53], [vid#0], [month#24 ASC NULLS FIRST]
+            +- *(3) Sort [vid#0 ASC NULLS FIRST, month#24 ASC NULLS FIRST], false, 0
+               +- Exchange hashpartitioning(vid#0, 200), true, [id=#56]
+                  +- SortAggregate(key=[substring(cast(date#1 as string), 0, 7)#67, vid#0], functions=[max(index#2), first(lat#10, false), first(lng#11, false), first(region#9, false)])
+                     +- *(2) Sort [substring(cast(date#1 as string), 0, 7)#67 ASC NULLS FIRST, vid#0 ASC NULLS FIRST], false, 0
+                        +- Exchange hashpartitioning(substring(cast(date#1 as string), 0, 7)#67, vid#0, 200), true, [id=#51]
+                           +- SortAggregate(key=[substring(cast(date#1 as string), 0, 7) AS substring(cast(date#1 as string), 0, 7)#67, vid#0], functions=[partial_max(index#2), partial_first(lat#10, false), partial_first(lng#11, false), partial_first(region#9, false)])
+                              +- *(1) Sort [substring(cast(date#1 as string), 0, 7) AS substring(cast(date#1 as string), 0, 7)#67 ASC NULLS FIRST, vid#0 ASC NULLS FIRST], false, 0
+                                 +- *(1) Project [vid#0, date#1, index#2, region#9, lat#10, lng#11]
+                                    +- *(1) Filter (((1572580800000000 > date#1) AND (date#1 >= 1567310400000000)) AND isnotnull(date#1))
+                                       +- FileScan csv [vid#0,date#1,index#2,region#9,lat#10,lng#11] Batched: false, DataFilters: [(1572580800000000 > date#1), (date#1 >= 1567310400000000), isnotnull(date#1)], Format: CSV, Location: InMemoryFileIndex[hdfs://10.124.48.39:9000/gdata/2019-01_00001.csv, hdfs://10.124.48.39:9000/gdat..., PartitionFilters: [], PushedFilters: [LessThan(date,2019-11-01 00:00:00.0), GreaterThanOrEqual(date,2019-09-01 00:00:00.0), IsNotNull(..., ReadSchema: struct<vid:string,date:timestamp,index:double,region:string,lat:double,lng:double>
+
+
+
+scala> val cal: Calendar = Calendar.getInstance()
+cal: java.util.Calendar = java.util.GregorianCalendar[time=1631885187891,areFieldsSet=true,areAllFieldsSet=true,lenient=true,zone=sun.util.calendar.ZoneInfo[id="America/New_York",offset=-18000000,dstSavings=3600000,useDaylight=true,transitions=235,lastRule=java.util.SimpleTimeZone[id=America/New_York,offset=-18000000,dstSavings=3600000,useDaylight=true,startYear=0,startMode=3,startMonth=2,startDay=8,startDayOfWeek=1,startTime=7200000,startTimeMode=0,endMode=3,endMonth=10,endDay=1,endDayOfWeek=1,endTime=7200000,endTimeMode=0]],firstDayOfWeek=1,minimalDaysInFirstWeek=1,ERA=1,YEAR=2021,MONTH=8,WEEK_OF_YEAR=38,WEEK_OF_MONTH=3,DAY_OF_MONTH=17,DAY_OF_YEAR=260,DAY_OF_WEEK=6,DAY_OF_WEEK_IN_MONTH=3,AM_PM=0,HOUR=9,HOUR_OF_DAY=9,MINUTE=26,SECOND=27,MILLISECOND=891,ZONE_OF...
+
+scala>     cal.set(year, month-1, 1, 0, 0, 0)
+
+scala>     cal.add(Calendar.HOUR_OF_DAY, -1)
+
+scala>     val minDate: String = "%04d-%02d-%02d %02d:00:00".format(
+     |       cal.get(Calendar.YEAR),
+     |       cal.get(Calendar.MONTH) + 1,
+     |       cal.get(Calendar.DAY_OF_MONTH),
+     |       cal.get(Calendar.HOUR_OF_DAY)
+     |     )
+minDate: String = 2019-09-30 23:00:00
+
+scala>     cal.add(Calendar.HOUR_OF_DAY, 1)
+
+scala>     cal.add(Calendar.MONTH, 1)
+
+scala>     val maxDate: String = "%04d-%02d-01 00:00:00".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+maxDate: String = 2019-11-01 00:00:00
+
+scala>     cal.add(Calendar.MONTH, -1)
+
+scala>     val curMonth: String = "%04d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+curMonth: String = 2019-10
+
+scala>     val windowSpec: WindowSpec = Window.partitionBy("vid").orderBy("hour")
+windowSpec: org.apache.spark.sql.expressions.WindowSpec = org.apache.spark.sql.expressions.WindowSpec@78206104
+
+scala>     val prevIndex: Column = lag("index", 1) over windowSpec
+prevIndex: org.apache.spark.sql.Column = lag(index, 1, NULL) OVER (PARTITION BY vid ORDER BY hour ASC NULLS FIRST unspecifiedframe$())
+
+scala>     val curIndex: Column = col("index")
+curIndex: org.apache.spark.sql.Column = index
+
+scala>     loadDF
+res19: org.apache.spark.sql.DataFrame = [vid: string, date: timestamp ... 10 more fields]
+
+scala>       .filter(col("date") >= lit(minDate) and col("date") < lit(maxDate) and col("city") === "Paris")
+res20: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [vid: string, date: timestamp ... 10 more fields]
+
+scala>       .groupBy(functions.substring(col("date"), pos = 0, len = 13).as("hour"), col("vid"))
+res21: org.apache.spark.sql.RelationalGroupedDataset = RelationalGroupedDataset: [grouping expressions: [hour, vid], value: [vid: string, date: timestamp ... 10 more fields], type: ]
+
+scala>       .agg(functions.max(col("index")).as("index"))
+res22: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 1 more field]
+
+scala>       .withColumn("cons", when(prevIndex.isNull, curIndex).otherwise(curIndex - prevIndex))
+res23: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 2 more fields]
+
+scala>       .filter(functions.substring(col("hour"), pos = 0, len = 7) === curMonth)
+res24: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [hour: string, vid: string ... 2 more fields]
+
+scala>       .select(col("hour"), col("vid"), col("cons"))
+res25: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 1 more field]
+
+scala>       .orderBy(col("hour"), col("vid"))
+res26: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [hour: string, vid: string ... 1 more field]
+
+scala> res26.explain
+== Physical Plan ==
+*(5) Sort [hour#82 ASC NULLS FIRST, vid#0 ASC NULLS FIRST], true, 0
++- Exchange rangepartitioning(hour#82 ASC NULLS FIRST, vid#0 ASC NULLS FIRST, 200), true, [id=#128]
+   +- *(4) Project [hour#82, vid#0, CASE WHEN isnull(_we0#101) THEN index#96 ELSE (index#96 - _we1#102) END AS cons#100]
+      +- *(4) Filter (isnotnull(hour#82) AND (substring(hour#82, 0, 7) = 2019-10))
+         +- Window [lag(index#96, 1, null) windowspecdefinition(vid#0, hour#82 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we0#101, lag(index#96, 1, null) windowspecdefinition(vid#0, hour#82 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we1#102], [vid#0], [hour#82 ASC NULLS FIRST]
+            +- *(3) Sort [vid#0 ASC NULLS FIRST, hour#82 ASC NULLS FIRST], false, 0
+               +- Exchange hashpartitioning(vid#0, 200), true, [id=#119]
+                  +- *(2) HashAggregate(keys=[substring(cast(date#1 as string), 0, 13)#110, vid#0], functions=[max(index#2)])
+                     +- Exchange hashpartitioning(substring(cast(date#1 as string), 0, 13)#110, vid#0, 200), true, [id=#115]
+                        +- *(1) HashAggregate(keys=[substring(cast(date#1 as string), 0, 13) AS substring(cast(date#1 as string), 0, 13)#110, vid#0], functions=[partial_max(index#2)])
+                           +- *(1) Project [vid#0, date#1, index#2]
+                              +- *(1) Filter (((((Paris = city#8) AND (1572580800000000 > date#1)) AND (date#1 >= 1569898800000000)) AND isnotnull(city#8)) AND isnotnull(date#1))
+                                 +- FileScan csv [vid#0,date#1,index#2,city#8] Batched: false, DataFilters: [(Paris = city#8), (1572580800000000 > date#1), (date#1 >= 1569898800000000), isnotnull(city#8), ..., Format: CSV, Location: InMemoryFileIndex[hdfs://10.124.48.39:9000/gdata/2019-01_00001.csv, hdfs://10.124.48.39:9000/gdat..., PartitionFilters: [], PushedFilters: [EqualTo(city,Paris), LessThan(date,2019-11-01 00:00:00.0), GreaterThanOrEqual(date,2019-09-30 23..., ReadSchema: struct<vid:string,date:timestamp,index:double,city:string>
+
+
+
+scala> res25.orderBy(col("hour"), col("vid"))
+res28: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [hour: string, vid: string ... 1 more field]
+
+scala> res28.explain
+== Physical Plan ==
+*(5) Sort [hour#82 ASC NULLS FIRST, vid#0 ASC NULLS FIRST], true, 0
++- Exchange rangepartitioning(hour#82 ASC NULLS FIRST, vid#0 ASC NULLS FIRST, 200), true, [id=#531]
+   +- *(4) Project [hour#82, vid#0, CASE WHEN isnull(_we0#101) THEN index#96 ELSE (index#96 - _we1#102) END AS cons#100]
+      +- *(4) Filter (isnotnull(hour#82) AND (substring(hour#82, 0, 7) = 2019-10))
+         +- Window [lag(index#96, 1, null) windowspecdefinition(vid#0, hour#82 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we0#101, lag(index#96, 1, null) windowspecdefinition(vid#0, hour#82 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we1#102], [vid#0], [hour#82 ASC NULLS FIRST]
+            +- *(3) Sort [vid#0 ASC NULLS FIRST, hour#82 ASC NULLS FIRST], false, 0
+               +- Exchange hashpartitioning(vid#0, 200), true, [id=#522]
+                  +- *(2) HashAggregate(keys=[substring(cast(date#1 as string), 0, 13)#961, vid#0], functions=[max(index#2)])
+                     +- Exchange hashpartitioning(substring(cast(date#1 as string), 0, 13)#961, vid#0, 200), true, [id=#518]
+                        +- *(1) HashAggregate(keys=[substring(cast(date#1 as string), 0, 13) AS substring(cast(date#1 as string), 0, 13)#961, vid#0], functions=[partial_max(index#2)])
+                           +- *(1) Project [vid#0, date#1, index#2]
+                              +- *(1) Filter (((((Paris = city#8) AND (1572580800000000 > date#1)) AND (date#1 >= 1569898800000000)) AND isnotnull(city#8)) AND isnotnull(date#1))
+                                 +- FileScan csv [vid#0,date#1,index#2,city#8] Batched: false, DataFilters: [(Paris = city#8), (1572580800000000 > date#1), (date#1 >= 1569898800000000), isnotnull(city#8), ..., Format: CSV, Location: InMemoryFileIndex[hdfs://10.124.48.39:9000/gdata/2019-10_00001.csv, hdfs://10.124.48.39:9000/gdat..., PartitionFilters: [], PushedFilters: [EqualTo(city,Paris), LessThan(date,2019-11-01 00:00:00.0), GreaterThanOrEqual(date,2019-09-30 23..., ReadSchema: struct<vid:string,date:timestamp,index:double,city:string>
+
+
+
+scala> val cal: Calendar = Calendar.getInstance()
+cal: java.util.Calendar = java.util.GregorianCalendar[time=1631885272324,areFieldsSet=true,areAllFieldsSet=true,lenient=true,zone=sun.util.calendar.ZoneInfo[id="America/New_York",offset=-18000000,dstSavings=3600000,useDaylight=true,transitions=235,lastRule=java.util.SimpleTimeZone[id=America/New_York,offset=-18000000,dstSavings=3600000,useDaylight=true,startYear=0,startMode=3,startMonth=2,startDay=8,startDayOfWeek=1,startTime=7200000,startTimeMode=0,endMode=3,endMonth=10,endDay=1,endDayOfWeek=1,endTime=7200000,endTimeMode=0]],firstDayOfWeek=1,minimalDaysInFirstWeek=1,ERA=1,YEAR=2021,MONTH=8,WEEK_OF_YEAR=38,WEEK_OF_MONTH=3,DAY_OF_MONTH=17,DAY_OF_YEAR=260,DAY_OF_WEEK=6,DAY_OF_WEEK_IN_MONTH=3,AM_PM=0,HOUR=9,HOUR_OF_DAY=9,MINUTE=27,SECOND=52,MILLISECOND=324,ZONE_OF...
+
+scala>     cal.set(year, month-1, 1, 0, 0, 0)
+
+scala>     cal.add(Calendar.HOUR_OF_DAY, -1)
+
+scala>     val minDate: String = "%04d-%02d-%02d %02d:00:00".format(
+     |       cal.get(Calendar.YEAR),
+     |       cal.get(Calendar.MONTH) + 1,
+     |       cal.get(Calendar.DAY_OF_MONTH),
+     |       cal.get(Calendar.HOUR_OF_DAY)
+     |     )
+minDate: String = 2019-09-30 23:00:00
+
+scala>     cal.add(Calendar.HOUR_OF_DAY, 1)
+
+scala>     cal.add(Calendar.MONTH, 1)
+
+scala>     val maxDate: String = "%04d-%02d-01 00:00:00".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+maxDate: String = 2019-11-01 00:00:00
+
+scala>     cal.add(Calendar.MONTH, -1)
+
+scala>     val curMonth: String = "%04d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+curMonth: String = 2019-10
+
+scala>     val windowSpec: WindowSpec = Window.partitionBy("vid").orderBy("hour")
+windowSpec: org.apache.spark.sql.expressions.WindowSpec = org.apache.spark.sql.expressions.WindowSpec@2d02eba8
+
+scala>     val prevIndex: Column = lag("index", 1) over windowSpec
+prevIndex: org.apache.spark.sql.Column = lag(index, 1, NULL) OVER (PARTITION BY vid ORDER BY hour ASC NULLS FIRST unspecifiedframe$())
+
+scala>     val curIndex: Column = col("index")
+curIndex: org.apache.spark.sql.Column = index
+
+scala>     loadDF
+res35: org.apache.spark.sql.DataFrame = [vid: string, date: timestamp ... 10 more fields]
+
+scala>       .filter(col("date") >= lit(minDate) and col("date") < lit(maxDate) and col("city") === "Paris")
+res36: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [vid: string, date: timestamp ... 10 more fields]
+
+scala>       .groupBy(functions.substring(col("date"), pos = 0, len = 13).as("hour"), col("vid"))
+res37: org.apache.spark.sql.RelationalGroupedDataset = RelationalGroupedDataset: [grouping expressions: [hour, vid], value: [vid: string, date: timestamp ... 10 more fields], type: ]
+
+scala>       .agg(functions.max(col("index")).as("index"))
+res38: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 1 more field]
+
+scala>       .withColumn("cons", when(prevIndex.isNull, curIndex).otherwise(curIndex - prevIndex))
+res39: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 2 more fields]
+
+scala>       .filter(functions.substring(col("hour"), pos = 0, len = 7) === curMonth)
+res40: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [hour: string, vid: string ... 2 more fields]
+
+scala>       .select(col("hour"), col("vid"), col("cons"))
+res41: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 1 more field]
+
+scala>       .orderBy(col("hour"), col("vid"))
+res42: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [hour: string, vid: string ... 1 more field]
+
+scala> res42.explain
+== Physical Plan ==
+*(4) Sort [hour#962 ASC NULLS FIRST, vid#0 ASC NULLS FIRST], true, 0
++- Exchange rangepartitioning(hour#962 ASC NULLS FIRST, vid#0 ASC NULLS FIRST, 200), true, [id=#624]
+   +- *(3) Project [hour#962, vid#0, CASE WHEN isnull(_we0#981) THEN index#976 ELSE (index#976 - _we1#982) END AS cons#980]
+      +- *(3) Filter (isnotnull(hour#962) AND (substring(hour#962, 0, 7) = 2019-10))
+         +- Window [lag(index#976, 1, null) windowspecdefinition(vid#0, hour#962 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we0#981, lag(index#976, 1, null) windowspecdefinition(vid#0, hour#962 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we1#982], [vid#0], [hour#962 ASC NULLS FIRST]
+            +- *(2) Sort [vid#0 ASC NULLS FIRST, hour#962 ASC NULLS FIRST], false, 0
+               +- Exchange hashpartitioning(vid#0, 200), true, [id=#615]
+                  +- *(1) ColumnarToRow
+                     +- FileScan parquet [hour#962,vid#0,index#976] Batched: true, DataFilters: [], Format: Parquet, Location: InMemoryFileIndex[hdfs://10.124.48.39:9000/tmp/cache/C1], PartitionFilters: [], PushedFilters: [], ReadSchema: struct<hour:string,vid:string,index:double>
+
+
+
+scala> val cal: Calendar = Calendar.getInstance()
+cal: java.util.Calendar = java.util.GregorianCalendar[time=1631885306204,areFieldsSet=true,areAllFieldsSet=true,lenient=true,zone=sun.util.calendar.ZoneInfo[id="America/New_York",offset=-18000000,dstSavings=3600000,useDaylight=true,transitions=235,lastRule=java.util.SimpleTimeZone[id=America/New_York,offset=-18000000,dstSavings=3600000,useDaylight=true,startYear=0,startMode=3,startMonth=2,startDay=8,startDayOfWeek=1,startTime=7200000,startTimeMode=0,endMode=3,endMonth=10,endDay=1,endDayOfWeek=1,endTime=7200000,endTimeMode=0]],firstDayOfWeek=1,minimalDaysInFirstWeek=1,ERA=1,YEAR=2021,MONTH=8,WEEK_OF_YEAR=38,WEEK_OF_MONTH=3,DAY_OF_MONTH=17,DAY_OF_YEAR=260,DAY_OF_WEEK=6,DAY_OF_WEEK_IN_MONTH=3,AM_PM=0,HOUR=9,HOUR_OF_DAY=9,MINUTE=28,SECOND=26,MILLISECOND=204,ZONE_OF...
+
+scala>     cal.set(year, month-1, 1, 0, 0, 0)
+
+scala>     cal.add(Calendar.HOUR_OF_DAY, -1)
+
+scala>     val minDate: String = "%04d-%02d-%02d %02d:00:00".format(
+     |       cal.get(Calendar.YEAR),
+     |       cal.get(Calendar.MONTH) + 1,
+     |       cal.get(Calendar.DAY_OF_MONTH),
+     |       cal.get(Calendar.HOUR_OF_DAY)
+     |     )
+minDate: String = 2019-09-30 23:00:00
+
+scala>     cal.add(Calendar.HOUR_OF_DAY, 1)
+
+scala>     cal.add(Calendar.MONTH, 1)
+
+scala>     val maxDate: String = "%04d-%02d-01 00:00:00".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+maxDate: String = 2019-11-01 00:00:00
+
+scala>     cal.add(Calendar.MONTH, -1)
+
+scala>     val curMonth: String = "%04d-%02d".format(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH)+1)
+curMonth: String = 2019-10
+
+scala>     val windowSpec: WindowSpec = Window.partitionBy("vid").orderBy("hour")
+windowSpec: org.apache.spark.sql.expressions.WindowSpec = org.apache.spark.sql.expressions.WindowSpec@3e45211b
+
+scala>     val prevIndex: Column = lag("index", 1) over windowSpec
+prevIndex: org.apache.spark.sql.Column = lag(index, 1, NULL) OVER (PARTITION BY vid ORDER BY hour ASC NULLS FIRST unspecifiedframe$())
+
+scala>     val curIndex: Column = col("index")
+curIndex: org.apache.spark.sql.Column = index
+
+scala>     loadDF
+res49: org.apache.spark.sql.DataFrame = [vid: string, date: timestamp ... 10 more fields]
+
+scala>       .filter(col("date") >= lit(minDate) and col("date") < lit(maxDate) and col("city") === "Paris")
+res50: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [vid: string, date: timestamp ... 10 more fields]
+
+scala>       .groupBy(functions.substring(col("date"), pos = 0, len = 13).as("hour"), col("vid"))
+res51: org.apache.spark.sql.RelationalGroupedDataset = RelationalGroupedDataset: [grouping expressions: [hour, vid], value: [vid: string, date: timestamp ... 10 more fields], type: ]
+
+scala>       .agg(functions.max(col("index")).as("index"))
+res52: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 1 more field]
+
+scala>       .withColumn("cons", when(prevIndex.isNull, curIndex).otherwise(curIndex - prevIndex))
+res53: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 2 more fields]
+
+scala>       .filter(functions.substring(col("hour"), pos = 0, len = 7) === curMonth)
+res54: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [hour: string, vid: string ... 2 more fields]
+
+scala>       .select(col("hour"), col("vid"), col("cons"))
+res55: org.apache.spark.sql.DataFrame = [hour: string, vid: string ... 1 more field]
+
+scala>       .orderBy(col("hour"), col("vid"))
+res56: org.apache.spark.sql.Dataset[org.apache.spark.sql.Row] = [hour: string, vid: string ... 1 more field]
+
+scala> res56.explain
+== Physical Plan ==
+*(4) Sort [hour#1047 ASC NULLS FIRST, vid#0 ASC NULLS FIRST], true, 0
++- Exchange rangepartitioning(hour#1047 ASC NULLS FIRST, vid#0 ASC NULLS FIRST, 200), true, [id=#717]
+   +- *(3) Project [hour#1047, vid#0, CASE WHEN isnull(_we0#1066) THEN index#1061 ELSE (index#1061 - _we1#1067) END AS cons#1065]
+      +- *(3) Filter (isnotnull(hour#1047) AND (substring(hour#1047, 0, 7) = 2019-10))
+         +- Window [lag(index#1061, 1, null) windowspecdefinition(vid#0, hour#1047 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we0#1066, lag(index#1061, 1, null) windowspecdefinition(vid#0, hour#1047 ASC NULLS FIRST, specifiedwindowframe(RowFrame, -1, -1)) AS _we1#1067], [vid#0], [hour#1047 ASC NULLS FIRST]
+            +- *(2) Sort [vid#0 ASC NULLS FIRST, hour#1047 ASC NULLS FIRST], false, 0
+               +- Exchange hashpartitioning(vid#0, 200), true, [id=#708]
+                  +- *(1) ColumnarToRow
+                     +- FileScan parquet [hour#1047,vid#0,index#1061] Batched: true, DataFilters: [], Format: Parquet, Location: InMemoryFileIndex[hdfs://10.124.48.39:9000/tmp/cache/C2], PartitionFilters: [], PushedFilters: [], ReadSchema: struct<hour:string,vid:string,index:double>
+
+
+
+scala>
