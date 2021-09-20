@@ -430,7 +430,7 @@ case class UnifiedOptimizer() extends Optimizer {
   ): Seq[(CaerusPlan, Option[CaerusPlan])] = {
     // Search for plans that are equal first.
     val res1: Seq[(CaerusPlan, Option[CaerusPlan])] = contents.keys.flatMap {
-      case candidate@Caching(cachedPlan, _) if cachedPlan.sameResult(plan) =>
+      case candidate@Caching(cachedPlan, _) if cachedPlan.equals(plan) =>
         val cacheLoad: CaerusCacheLoad = CaerusCacheLoad(cachedPlan.output, Seq(contents(candidate)), "parquet")
         Some(cacheLoad, None)
       case _ =>
