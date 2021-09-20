@@ -144,6 +144,9 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor, pat
     // Get optimized plan without new additions.
     val optimizedPlan: CaerusPlan = optimizer.optimize(plan, contents, emptyAddReference)
 
+    if (remainingCandidates.isEmpty)
+      return optimizedPlan
+
     // Get future plans.
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
     logger.info("Predictions:\n%s".format(plans.mkString("\n")))
