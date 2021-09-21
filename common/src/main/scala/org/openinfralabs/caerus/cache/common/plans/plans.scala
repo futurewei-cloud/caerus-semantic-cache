@@ -149,7 +149,8 @@ package object plans {
     extends CaerusWrite
   case class CaerusFileSkippingIndexing(override val name: String, override val child: CaerusSourceLoad, index: Int)
     extends CaerusWrite
-  case class CaerusCaching(override val name: String, override val child: CaerusPlan) extends CaerusWrite
+  case class CaerusCaching(override val name: String, plan: CaerusPlan, override val child: CaerusPlan)
+    extends CaerusWrite
 
   case class CaerusDelete(paths: Seq[String]) extends CaerusPlan {
     override def output: Seq[Attribute] = Seq.empty[Attribute]

@@ -143,6 +143,8 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor, pat
 
     // Get optimized plan without new additions.
     val optimizedPlan: CaerusPlan = optimizer.optimize(plan, contents, emptyAddReference)
+    if (remainingCandidates.isEmpty)
+      return optimizedPlan
 
     if (remainingCandidates.isEmpty)
       return optimizedPlan
@@ -198,7 +200,7 @@ case class BasicStorageIOPlanner(optimizer: Optimizer, predictor: Predictor, pat
           CaerusFileSkippingIndexing(topCandidatePath, source, index)
         case Caching(cachedPlan, _) =>
           val optimizedCachedPlan = optimizer.optimize(cachedPlan, newContents - topCandidate, emptyAddReference)
-          CaerusCaching(topCandidatePath, optimizedCachedPlan)
+          CaerusCaching(topCandidatePath, cachedPlan, optimizedCachedPlan)
       }
       val caerusDelete: Option[CaerusDelete] = if (!contents.keySet.subsetOf(newContents.keySet)) {
         val deletedCandidates: Set[Candidate] = contents.keySet -- newContents.keySet

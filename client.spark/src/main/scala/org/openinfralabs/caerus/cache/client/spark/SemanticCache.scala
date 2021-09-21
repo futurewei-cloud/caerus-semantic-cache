@@ -263,9 +263,15 @@ class SemanticCache(
         } else {
           CaerusFalse()
         }
-      case CaerusCaching(name, child) =>
-        val plan: LogicalPlan = transformBack(child, inputPlan, inputCaerusPlan)
-        val bytesWritten: Long = startCacheIntermediateData(plan, Tier.STORAGE_DISK, name.split(Path.SEPARATOR).last)
+      case CaerusCaching(name, caerusPlan, child) =>
+        val initialPlan: LogicalPlan = transformBack(caerusPlan, inputPlan, inputCaerusPlan)
+        val optimizedPlan: LogicalPlan = transformBack(child, inputPlan, inputCaerusPlan)
+        val bytesWritten: Long = startCacheIntermediateData(
+          initialPlan,
+          optimizedPlan,
+          Tier.STORAGE_DISK,
+          name.split(Path.SEPARATOR).last
+        )
         if (bytesWritten >= 0) {
           CaerusTrue()
         } else {
@@ -608,12 +614,17 @@ class SemanticCache(
     startFileSkippingIndexing(loadDF, indexedAttribute, tier, name)
   }
 
-  private def startCacheIntermediateData(logicalPlan: LogicalPlan, tier: Tier, name: String): Long = {
+  private def startCacheIntermediateData(
+    initialPlan: LogicalPlan,
+    optimizedPlan: LogicalPlan,
+    tier: Tier,
+    name: String
+  ): Long = {
     val beginTime: Long = System.nanoTime()
 
     // Transform logical plan to CaerusPlan.
-    val caerusPlan = transform(logicalPlan)
-    val candidate: Caching = Caching(caerusPlan)
+    val caerusInitialPlan = transform(initialPlan)
+    val candidate: Caching = Caching(caerusInitialPlan)
     sizeEstimator.estimateSize(candidate)
     logger.debug("JSON Candidate:\n%s".format(candidate.toJSON))
     val path: String = try {
@@ -638,11 +649,11 @@ class SemanticCache(
         bucketSpec = None,
         fileFormat = new ParquetFileFormat(),
         options = Map.empty[String,String],
-        query = logicalPlan,
+        query = optimizedPlan,
         mode = SaveMode.Overwrite,
         catalogTable = None,
         fileIndex = None,
-        outputColumnNames = logicalPlan.output.map(_.name))
+        outputColumnNames = optimizedPlan.output.map(_.name))
       val queryExecution: QueryExecution = spark.sessionState.executePlan(writePlan)
       queryExecution.toRdd
       false
@@ -709,7 +720,7 @@ class SemanticCache(
       logger.warn("The following plan is not supported for caching:\n%s".format(logicalPlan))
       return 0L
     }
-    startCacheIntermediateData(logicalPlan, tier, name)
+    startCacheIntermediateData(logicalPlan, logicalPlan, tier, name)
   }
 
   /**

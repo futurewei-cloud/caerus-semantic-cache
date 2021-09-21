@@ -4,7 +4,6 @@ import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import io.grpc.{Server, ServerBuilder}
 import org.apache.hadoop.fs.Path
-import org.apache.spark.sql.SparkSession
 import org.openinfralabs.caerus.cache.common.Mode.Mode
 import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common._
