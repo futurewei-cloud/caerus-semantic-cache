@@ -79,7 +79,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
 
   private var pathId: Long = 0L
   private val names: mutable.HashMap[String, Candidate] = mutable.HashMap.empty[String, Candidate]
+  private val names_tier: mutable.HashMap[String, Tier] = mutable.HashMap.empty[String, Tier]
   private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
+  private val multiTier_contents: mutable.HashMap[Tier, mutable.HashMap[Candidate,String]] = mutable.HashMap.empty[Tier, mutable.HashMap[Candidate,String]]
   private val reservations: mutable.HashMap[(String,Candidate),String] =
     mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
@@ -103,7 +105,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     else
       "none"
   }
-  private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
+  // private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
+  private val planner: Planner = BasicStorageIOMultiTierPlanner(optimizer, predictor,tiers.toMap)
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
@@ -227,6 +230,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       names(request.name) = candidate
+      names_tier(request.name) = tier
       reservations((request.clientId,candidate)) = path
       capacity(tier) -= reservedSize
       logger.info("Reserve for candidate:\n%s\nReserved size: %s\tUpdated capacity of tier %s: %s."
@@ -274,6 +278,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         val newCandidate: Candidate = candidate.withNewSizeInfo(newSizeInfo)
         names(request.name) = newCandidate
         contents.put(newCandidate,path)
+        val temp_contents: mutable.HashMap[Candidate,String]  = multiTier_contents(tier)
+        temp_contents.put(newCandidate,path)
+        multiTier_contents(tier) = temp_contents
         reverseReferences(path) = Set.empty[String]
         logger.info("Updated Contents: %s\n".format(contents))
       } else {
@@ -411,6 +418,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val caerusPlan: CaerusPlan = CaerusPlan.fromJSON(request.caerusPlan)
       val availableContents: mutable.Map[Candidate,String] =
         contents.filter(element => !markedForDeletion.contains(element._2))
+      val available_multiTier_contents: mutable.HashMap[Tier, Map[Candidate,String]] = mutable.HashMap.empty[Tier, Map[Candidate,String]]
+      for((tier, contents) <- multiTier_contents){
+        available_multiTier_contents(tier) = contents.filter(element => !markedForDeletion.contains(element._2)).toMap
+      }
       val optimizedPlan = {
         if (operationMode == Mode.MANUAL_WRITE) {
           optimizer.optimize(
@@ -419,18 +430,24 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             path => addReference(request.clientId, path)
           )
         } else if (operationMode == Mode.FULLY_AUTOMATIC) {
-          val cap: Long = {
+          /*val cap: Long = {
             if (lastTier.isDefined)
               capacity(lastTier.get)
             else
               0L
-          }
-          planner.optimize(
+          }*/
+          val new_multiTier_contents:Map[Tier, Map[Candidate,String]] =planner.optimize(
             caerusPlan,
-            availableContents.toMap[Candidate,String],
+            available_multiTier_contents.toMap,
             request.candidates.map(Candidate.fromJSON),
-            cap
+            capacity.toMap
           )
+          // so now we have new multi-tier contents, and will loop through tiers to issue write and eviction
+          for((tier,contents) <- available_multiTier_contents ){
+            val new_contents = new_multiTier_contents(tier)
+            if(new_contents.keySet - contents.keySet)
+          }
+
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)
