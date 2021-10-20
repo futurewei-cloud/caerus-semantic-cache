@@ -4,10 +4,11 @@ import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import io.grpc.{Server, ServerBuilder}
 import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.catalyst.plans.logical.{Filter, Project}
 import org.openinfralabs.caerus.cache.common.Mode.Mode
 import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common._
-import org.openinfralabs.caerus.cache.common.plans.{CaerusLoadWithIndices, CaerusPlan}
+import org.openinfralabs.caerus.cache.common.plans.{CaerusCacheLoad, CaerusCaching, CaerusDelete, CaerusFileSkippingIndexing, CaerusIf, CaerusLoadWithIndices, CaerusPlan, CaerusRepartitioning, CaerusWrite}
 import org.openinfralabs.caerus.cache.grpc.service._
 
 import scala.collection.mutable
@@ -58,10 +59,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       Mode(3)
     }
   }
+  // print out tier configuration for mode3
+  if (operationMode == Mode.FULLY_AUTOMATIC && tiers.size >1) {
+    logger.info("Tiers info for Mode 3")
+    for((tier, path) <- tiers) logger.info("Tier: %s, Path: %s".format(tier, path))
+  }
+  // disable this since we now try to support multi-tier
+  /*
   if (operationMode == Mode.FULLY_AUTOMATIC && (tiers.size > 1 || !tiers.contains(Tier.STORAGE_DISK))) {
     logger.error("Operation mode 3 cannot be defined with multiple tiers. Only with STORAGE_DISK.")
     System.exit(-1)
-  }
+  }*/
 
   private val port: Int = {
     if (conf.hasPath("server.port"))
@@ -188,6 +196,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private def addReference(clientId: String, path: String): Unit = {
     references(clientId) = references(clientId) + path
   }
+
+  private def emptyAddReference(path: String): Unit = {}
 
   private class SemanticCacheService extends SemanticCacheServiceGrpc.SemanticCacheService {
     /**
@@ -325,6 +335,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       val path: String = contents(candidate)
       assert(reverseReferences.contains(path))
+      val tier: Tier = getTierFromPath(path)
       logger.info("Mark candidate for deletion: %s\n".format(candidate))
       markedForDeletion.add(path)
       terminateClients()
@@ -340,6 +351,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       logger.info("Reverse References: %s".format(reverseReferences))
       contents.remove(candidate)
       logger.info("Updated Contents: %s\n".format(contents))
+      val temp_contents: mutable.HashMap[Candidate,String]  = multiTier_contents(tier)
+      temp_contents.remove(candidate)
+      multiTier_contents(tier) = temp_contents
+      logger.info("Update Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, temp_contents))
       Future.successful(DeleteReply(path, format))
     }
 
@@ -405,6 +420,50 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
     }
 
+    private def insertCaerusWrite(
+                                   plan: CaerusPlan,
+                                   backupPlan: CaerusPlan,
+                                   caerusWrite: CaerusWrite,
+                                   caerusDelete: Option[CaerusDelete],
+                                 ): CaerusPlan = {
+      logger.info("SemanticCacheManager: Insert Caerus Write for plan:\n%s".format(plan))
+      plan match {
+        case caerusCacheLoad: CaerusCacheLoad if caerusCacheLoad.sources == Seq(caerusWrite.name) =>
+          var caerusIf: CaerusIf = caerusWrite match {
+            case _: CaerusRepartitioning | _: CaerusCaching =>
+              CaerusIf(Seq(caerusWrite, plan, backupPlan))
+            case _ =>
+              logger.warn("Found caerus write %s, when we should only have Repartitioning and Caching"
+                .format(caerusWrite))
+              return plan
+          }
+          if (caerusDelete.isDefined)
+            caerusIf = CaerusIf(Seq(caerusDelete.get, caerusIf, caerusIf.children(2)))
+          caerusIf
+        case CaerusLoadWithIndices(_, loadChild, _, loadIndex) =>
+          caerusWrite match {
+            case CaerusFileSkippingIndexing(name, _, index) if index == loadIndex =>
+              val caerusCacheLoad: CaerusCacheLoad =
+                loadChild.asInstanceOf[Project].child.asInstanceOf[Filter].child.asInstanceOf[CaerusCacheLoad]
+              if (caerusCacheLoad.sources == Seq(name)) {
+                var caerusIf = CaerusIf(Seq(caerusWrite, plan, backupPlan))
+                if (caerusDelete.isDefined)
+                  caerusIf = CaerusIf(Seq(caerusDelete.get, caerusIf, caerusIf.children(2)))
+                caerusIf
+              } else {
+                plan
+              }
+            case _ =>
+              plan
+          }
+        case _ =>
+          assert(plan.children.size == backupPlan.children.size)
+          val newChildren: Seq[CaerusPlan] = plan.children.indices.map(i =>
+            insertCaerusWrite(plan.children(i), backupPlan.children(i), caerusWrite, caerusDelete))
+          plan.withNewChildren(newChildren)
+      }
+    }
+
     /**
      * Semantic Cache Client API. Optimization RPC.
      */
@@ -444,10 +503,40 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           )
           // so now we have new multi-tier contents, and will loop through tiers to issue write and eviction
           for((tier,contents) <- available_multiTier_contents ){
-            val new_contents = new_multiTier_contents(tier)
-            if(new_contents.keySet - contents.keySet)
+            val newContents = new_multiTier_contents(tier)
+            logger.info("New Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, newContents))
+            val top_can : Set[Candidate] = newContents.keySet -- contents.keySet
+            if(top_can.nonEmpty && top_can.size == 1){ // means we have a new candidate to write
+              val topCandidate: Candidate = top_can.head
+              val topCandidatePath = newContents(topCandidate)
+              val caerusWrite: CaerusWrite = topCandidate match {
+                case Repartitioning(source, index, _) =>
+                  CaerusRepartitioning(topCandidatePath, source, index)
+                case FileSkippingIndexing(source, index, _) =>
+                  CaerusFileSkippingIndexing(topCandidatePath, source, index)
+                case Caching(cachedPlan, _) =>
+                  val optimizedCachedPlan = optimizer.optimize(cachedPlan, newContents - topCandidate, emptyAddReference)
+                  CaerusCaching(topCandidatePath, cachedPlan, optimizedCachedPlan)
+              }
+              val caerusDelete: Option[CaerusDelete] = if (!contents.keySet.subsetOf(newContents.keySet)) {
+                val deletedCandidates: Set[Candidate] = contents.keySet -- newContents.keySet
+                Some(CaerusDelete(deletedCandidates.toSeq.map(contents)))
+              } else {
+                None
+              }
+              val optimizedPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents, emptyAddReference)
+              val backupPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents-topCandidate, emptyAddReference)
+              insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
+            }
           }
-
+          //so now we updated all the contents, will use all the contents, new and old to do one last optimization
+          var all_contents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
+          for((tier, contents) <- new_multiTier_contents){
+            all_contents = all_contents + contents
+          }
+          logger.info("Contents from all the Tiers: %s\n".format(all_contents))
+          logger.info("Doing last optimization with all contents from all tiers")
+          optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)

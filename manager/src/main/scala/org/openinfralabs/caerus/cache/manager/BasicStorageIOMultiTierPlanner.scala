@@ -12,7 +12,7 @@ import scala.collection.mutable
 case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predictor, tiers: Map[Tier, String]) extends Planner {
   private final val logger: Logger = LoggerFactory.getLogger(this.getClass)
 
-  private def emptyAddReference(path: String): Unit = {}
+  //private def emptyAddReference(path: String): Unit = {}
 
   private def addReference(references: mutable.HashMap[String,Long]): String => Unit = {
     path => {
@@ -82,7 +82,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     (bottomCandidate, newCost)
   }
 
-  private def insertCaerusWrite(
+  /*private def insertCaerusWrite(
     plan: CaerusPlan,
     backupPlan: CaerusPlan,
     caerusWrite: CaerusWrite,
@@ -124,7 +124,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
           insertCaerusWrite(plan.children(i), backupPlan.children(i), caerusWrite, caerusDelete))
         plan.withNewChildren(newChildren)
     }
-  }
+  }*/
 
   override def optimize(
     plan: CaerusPlan,
