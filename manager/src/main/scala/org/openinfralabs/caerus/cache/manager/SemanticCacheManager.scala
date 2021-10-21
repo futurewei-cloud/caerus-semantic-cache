@@ -90,6 +90,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   private val names_tier: mutable.HashMap[String, Tier] = mutable.HashMap.empty[String, Tier]
   private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
   private val multiTier_contents: mutable.HashMap[Tier, mutable.HashMap[Candidate,String]] = mutable.HashMap.empty[Tier, mutable.HashMap[Candidate,String]]
+  for((tier, path) <- tiers) multiTier_contents(tier) = mutable.HashMap.empty[Candidate,String]
   private val reservations: mutable.HashMap[(String,Candidate),String] =
     mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
@@ -504,7 +505,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           // so now we have new multi-tier contents, and will loop through tiers to issue write and eviction
           for((tier,contents) <- available_multiTier_contents ){
             val newContents = new_multiTier_contents(tier)
-            logger.info("New Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, newContents))
+            logger.info("New Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, newContents.mkString("\n")))
             val top_can : Set[Candidate] = newContents.keySet -- contents.keySet
             if(top_can.nonEmpty && top_can.size == 1){ // means we have a new candidate to write
               val topCandidate: Candidate = top_can.head
@@ -534,7 +535,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           for((tier, contents) <- new_multiTier_contents){
             all_contents.++(contents)
           }
-          logger.info("Contents from all the Tiers: %s\n".format(all_contents))
+          logger.info("Contents from all the Tiers: %s\n".format(all_contents.mkString("\n")))
           logger.info("Doing last optimization with all contents from all tiers")
           optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
         } else {
