@@ -534,7 +534,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           //so now we updated all the contents, will use all the contents, new and old to do one last optimization
           var all_contents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
           for((tier, contents) <- new_multiTier_contents){
-            all_contents.++(contents)
+            logger.info("Add Contents from Tier: %s, to all_contents:  %s\n".format(tier, contents.mkString("\n")))
+            all_contents= all_contents ++ contents
           }
           logger.info("Contents from all the Tiers: %s\n".format(all_contents.mkString("\n")))
           logger.info("Doing last optimization with all contents from all tiers")
