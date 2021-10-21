@@ -141,6 +141,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
 
     for ((tier, contents) <- all_contents){
       logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
+      logger.info("existing candidates:\n%s\n".format(candidates.mkString("\n")))
       val remainingCandidates: Seq[Candidate] = candidates.filter(!contents.contains(_)).filter(candidate => {
         val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
         optimizer.optimize(plan, contents + ((candidate, "temp")), addReference(tempReferences))

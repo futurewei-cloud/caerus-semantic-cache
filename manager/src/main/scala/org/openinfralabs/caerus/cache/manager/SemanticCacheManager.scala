@@ -510,6 +510,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             if(top_can.nonEmpty && top_can.size == 1){ // means we have a new candidate to write
               val topCandidate: Candidate = top_can.head
               val topCandidatePath = newContents(topCandidate)
+              logger.info("Top Candidate to write: %s, path: %s".format(topCandidate, topCandidatePath))
               val caerusWrite: CaerusWrite = topCandidate match {
                 case Repartitioning(source, index, _) =>
                   CaerusRepartitioning(topCandidatePath, source, index)
