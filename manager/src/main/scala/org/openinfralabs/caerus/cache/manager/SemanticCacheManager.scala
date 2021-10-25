@@ -427,7 +427,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
                                    caerusWrite: CaerusWrite,
                                    caerusDelete: Option[CaerusDelete],
                                  ): CaerusPlan = {
-      logger.info("SemanticCacheManager: Insert Caerus Write for plan:\n%s".format(plan))
+      logger.info("SemanticCacheManager: Insert Caerus Write for plan:\n%s \n, backupPlan:\n%s \n, caeruswrite:\n%s \n, caerusdelete \n%s \n ".format(plan, backupPlan, caerusWrite,caerusDelete))
       plan match {
         case caerusCacheLoad: CaerusCacheLoad if caerusCacheLoad.sources == Seq(caerusWrite.name) =>
           var caerusIf: CaerusIf = caerusWrite match {
