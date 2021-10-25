@@ -440,8 +440,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           }
           if (caerusDelete.isDefined)
             caerusIf = CaerusIf(Seq(caerusDelete.get, caerusIf, caerusIf.children(2)))
+          logger.info("in caerusCacheLoad, returned plan \n %s".format(caerusIf))
           caerusIf
         case CaerusLoadWithIndices(_, loadChild, _, loadIndex) =>
+          logger.info("in caerusCacheLoad")
           caerusWrite match {
             case CaerusFileSkippingIndexing(name, _, index) if index == loadIndex =>
               val caerusCacheLoad: CaerusCacheLoad =
@@ -458,6 +460,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               plan
           }
         case _ =>
+          logger.info("in write else")
           assert(plan.children.size == backupPlan.children.size)
           val newChildren: Seq[CaerusPlan] = plan.children.indices.map(i =>
             insertCaerusWrite(plan.children(i), backupPlan.children(i), caerusWrite, caerusDelete))
