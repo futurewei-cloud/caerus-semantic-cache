@@ -22,10 +22,10 @@ import scala.io.Source
  */
 class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends LazyLogging {
   private val tierNames: Map[String, Tier] = Map(
-    "compute-memory" -> Tier.COMPUTE_MEMORY,
-    "compute-disk" -> Tier.COMPUTE_DISK,
+    "storage-disk" -> Tier.STORAGE_DISK,
     "storage-memory" -> Tier.STORAGE_MEMORY,
-    "storage-disk" -> Tier.STORAGE_DISK
+    "compute-disk" -> Tier.COMPUTE_DISK,
+    "compute-memory" -> Tier.COMPUTE_MEMORY
   )
   private val tiers: mutable.HashMap[Tier, String] = mutable.HashMap.empty[Tier, String]
   private val capacity: mutable.HashMap[Tier, Long] = mutable.HashMap.empty[Tier, Long]

@@ -138,11 +138,11 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     // Get future plans.
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
     logger.info("Predictions:\n%s".format(plans.mkString("\n")))
-
+    var all_candidates: Seq[Candidate] = candidates
     for ((tier, contents) <- all_contents){
       logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
-      logger.info("existing candidates:\n%s\n".format(candidates.mkString("\n")))
-      val remainingCandidates: Seq[Candidate] = candidates.filter(!contents.contains(_)).filter(candidate => {
+      logger.info("existing candidates:\n%s\n".format(all_candidates.mkString("\n")))
+      val remainingCandidates: Seq[Candidate] = all_candidates.filter(!contents.contains(_)).filter(candidate => {
         val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
         optimizer.optimize(plan, contents + ((candidate, "temp")), addReference(tempReferences))
         tempReferences.contains("temp")
@@ -188,7 +188,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         logger.info("New contents:\n%s".format(newContents.mkString("\n")))
         new_multitier_contents(tier) = newContents
         // if the topcandidate is been added, remove it from list
-        candidates.filterNot(candidate => candidate == topCandidate)
+        all_candidates = all_candidates.filterNot(candidate => candidate == topCandidate)
       }
     }
     new_multitier_contents.toMap
