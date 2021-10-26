@@ -11,7 +11,7 @@ import org.openinfralabs.caerus.cache.common._
 import org.openinfralabs.caerus.cache.common.plans.{CaerusCacheLoad, CaerusCaching, CaerusDelete, CaerusFileSkippingIndexing, CaerusIf, CaerusLoadWithIndices, CaerusPlan, CaerusRepartitioning, CaerusWrite}
 import org.openinfralabs.caerus.cache.grpc.service._
 
-import scala.collection.mutable
+import scala.collection.{breakOut, mutable}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.io.Source
 
@@ -506,6 +506,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             capacity.toMap
           )
           // so now we have new multi-tier contents, and will loop through tiers to issue write and eviction
+          var inter_op_plan:CaerusPlan = caerusPlan
           for((tier,contents) <- available_multiTier_contents ){
             val newContents = new_multiTier_contents(tier)
             logger.info("New Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, newContents.mkString("\n")))
@@ -531,7 +532,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               }
               val optimizedPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents, emptyAddReference)
               val backupPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents-topCandidate, emptyAddReference)
-              insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
+              inter_op_plan = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
             }
           }
           //so now we updated all the contents, will use all the contents, new and old to do one last optimization
@@ -542,7 +543,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           }
           logger.info("Contents from all the Tiers: %s\n".format(all_contents.mkString("\n")))
           logger.info("Doing last optimization with all contents from all tiers")
-          optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
+          val op_plan = optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
+          logger.info("Inter optimized plan: %s".format(inter_op_plan))
+          logger.info("Final optimized plan: %s".format(op_plan))
+          op_plan
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)
