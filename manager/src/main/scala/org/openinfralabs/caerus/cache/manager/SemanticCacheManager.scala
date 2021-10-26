@@ -546,7 +546,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           val op_plan = optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
           logger.info("Inter optimized plan: %s".format(inter_op_plan))
           logger.info("Final optimized plan: %s".format(op_plan))
-          op_plan
+          inter_op_plan
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)
