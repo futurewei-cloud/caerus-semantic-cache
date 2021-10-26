@@ -555,7 +555,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       logger.info("References: %s".format(references))
       logger.info("Reverse References: %s".format(reverseReferences))
-      printLoadWithIndices(optimizedPlan)
+      logger.info("optimized CaerusPlan before send out: %s".format(optimizedPlan))
+      //printLoadWithIndices(optimizedPlan)
       Future.successful(OptimizationReply(optimizedCaerusPlan = optimizedPlan.toJSON))
     }
 
