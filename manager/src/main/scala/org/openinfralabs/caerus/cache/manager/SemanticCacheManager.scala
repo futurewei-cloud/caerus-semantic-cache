@@ -213,9 +213,12 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       registeredClients(request.clientId) = System.currentTimeMillis()
       val candidate: Candidate = Candidate.fromJSON(request.candidate)
       val reservedSize: Long = candidate.sizeInfo.get.writeSize
-      val tier: Tier = Tier(request.tier)
+      val path = request.name
+      val tier: Tier = getTierFromPath(path)
+      //val tier: Tier = Tier(request.tier)
+
       logger.info("input parameters for reserve, candidate: %s, tier:%s, name: %s".format(candidate.toString,tier,request.name))
-      val path = try {
+      /*val path = try {
         if (operationMode == Mode.FULLY_AUTOMATIC || operationMode == Mode.MANUAL_EVICTION)
           getPath(request.name, tier)
         else
@@ -224,7 +227,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         case e: Exception =>
           logger.warn(e.getMessage)
           return Future.failed(e)
-      }
+      }*/
       if (names.contains(request.name)) {
         val message: String = "Name %s is already used for cached or reserved contents.".format(request.name)
         logger.warn(message)

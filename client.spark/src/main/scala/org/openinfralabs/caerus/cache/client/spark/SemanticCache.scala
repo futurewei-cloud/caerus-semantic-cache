@@ -270,7 +270,8 @@ class SemanticCache(
           initialPlan,
           optimizedPlan,
           Tier.STORAGE_DISK,
-          name.split(Path.SEPARATOR).last
+          //name.split(Path.SEPARATOR).last
+          name
         )
         if (bytesWritten >= 0) {
           CaerusTrue()
