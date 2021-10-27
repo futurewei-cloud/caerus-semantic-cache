@@ -150,47 +150,53 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
           tempReferences.contains("temp")
         })
         logger.info("Remaining candidates:\n%s".format(remainingCandidates.mkString("\n")))
-        val initialCost: Long = findCost(contents, plans)
-        logger.info("Initial I/O: %s MiB".format(initialCost /(1024*1024)))
+        if (remainingCandidates.nonEmpty) {
+          val initialCost: Long = findCost(contents, plans)
+          logger.info("Initial I/O: %s MiB".format(initialCost / (1024 * 1024)))
 
-        // Find candidate per byte benefit.
-        val costs: Seq[Long] = remainingCandidates.map(candidate => {
-          findCost(contents + ((candidate,"temp")), plans) +
-            findSourceReadSize(contents, candidate) +
-            candidate.sizeInfo.get.writeSize
-        })
-        val benefits: Seq[Long] = costs.map(cost => initialCost - cost)
-        val benefitsPerByte: Seq[Long] = benefits.indices.map(i => {
-          benefits(i) / remainingCandidates(i).sizeInfo.get.writeSize
-        })
-        logger.info("Benefits/Byte: %s".format(benefitsPerByte.mkString(", ")))
+          // Find candidate per byte benefit.
+          val costs: Seq[Long] = remainingCandidates.map(candidate => {
+            findCost(contents + ((candidate, "temp")), plans) +
+              findSourceReadSize(contents, candidate) +
+              candidate.sizeInfo.get.writeSize
+          })
+          val benefits: Seq[Long] = costs.map(cost => initialCost - cost)
+          val benefitsPerByte: Seq[Long] = benefits.indices.map(i => {
+            benefits(i) / remainingCandidates(i).sizeInfo.get.writeSize
+          })
+          logger.info("Benefits/Byte: %s".format(benefitsPerByte.mkString(", ")))
 
-        val topCandidateIndex: Int = benefitsPerByte.zipWithIndex.maxBy(_._1)._2
-        val topCandidate = remainingCandidates(topCandidateIndex)
-        var newCost: Long = costs(topCandidateIndex)
-        if (newCost - initialCost >= 0) {
-          logger.info("No positive candidate found. No content change")
-          new_multitier_contents(tier) = contents
+          val topCandidateIndex: Int = benefitsPerByte.zipWithIndex.maxBy(_._1)._2
+          val topCandidate = remainingCandidates(topCandidateIndex)
+          var newCost: Long = costs(topCandidateIndex)
+          if (newCost - initialCost >= 0) {
+            logger.info("No positive candidate found. No content change")
+            new_multitier_contents(tier) = contents
 
-        }else {
-          logger.info("Top candidate: %s".format(topCandidate))
+          } else {
+            logger.info("Top candidate: %s".format(topCandidate))
 
-          val topCandidateName: String = getName(topCandidate)
-          val topCandidatePath: String = tiers(tier) + Path.SEPARATOR + topCandidateName
-          var newContents = contents + ((topCandidate, topCandidatePath))
-          var newSize: Long = newContents.keys.map(candidate => candidate.sizeInfo.get.writeSize).sum
-          while (newSize > capacity(tier)) {
-            logger.warn("Capacity is not big enough to hold an extra candidate. Do not change anything.")
-            val bottomCandidateInfo: (Candidate, Long) = findBottomCandidate(newContents, plans, newCost)
-            val bottomCandidate: Candidate = bottomCandidateInfo._1
-            newCost = bottomCandidateInfo._2
-            newContents -= bottomCandidate
-            newSize -= bottomCandidate.sizeInfo.get.writeSize
+            val topCandidateName: String = getName(topCandidate)
+            val topCandidatePath: String = tiers(tier) + Path.SEPARATOR + topCandidateName
+            var newContents = contents + ((topCandidate, topCandidatePath))
+            var newSize: Long = newContents.keys.map(candidate => candidate.sizeInfo.get.writeSize).sum
+            while (newSize > capacity(tier)) {
+              logger.warn("Capacity is not big enough to hold an extra candidate. Do not change anything.")
+              val bottomCandidateInfo: (Candidate, Long) = findBottomCandidate(newContents, plans, newCost)
+              val bottomCandidate: Candidate = bottomCandidateInfo._1
+              newCost = bottomCandidateInfo._2
+              newContents -= bottomCandidate
+              newSize -= bottomCandidate.sizeInfo.get.writeSize
+            }
+            logger.info("New contents:\n%s".format(newContents.mkString("\n")))
+            new_multitier_contents(tier) = newContents
+            // if the topcandidate is been added, remove it from list
+            all_candidates = all_candidates.filterNot(candidate => candidate.equals(topCandidate))
           }
-          logger.info("New contents:\n%s".format(newContents.mkString("\n")))
-          new_multitier_contents(tier) = newContents
-          // if the topcandidate is been added, remove it from list
-          all_candidates = all_candidates.filterNot(candidate => candidate.equals(topCandidate) )
+        }
+        else{
+          logger.info("No remain candidate found. No content change")
+          new_multitier_contents(tier) = contents
         }
       }
     }
