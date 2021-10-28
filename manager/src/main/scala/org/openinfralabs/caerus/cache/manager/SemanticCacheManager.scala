@@ -510,7 +510,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             capacity.toMap
           )
           // so now we have new multi-tier contents, and will loop through tiers to issue write and eviction
-          var inter_op_plan:CaerusPlan = caerusPlan
+          var inter_op_plan: mutable.HashMap[Tier, CaerusPlan] = mutable.HashMap.empty[Tier, CaerusPlan]
           for((tier,contents) <- available_multiTier_contents ){
             val newContents = new_multiTier_contents(tier)
             logger.info("New Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, newContents.mkString("\n")))
@@ -536,21 +536,31 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               }
               val optimizedPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents, emptyAddReference)
               val backupPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents-topCandidate, emptyAddReference)
-              inter_op_plan = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
+              inter_op_plan(tier) = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
             }
           }
-          //so now we updated all the contents, will use all the contents, new and old to do one last optimization
-          var all_contents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
-          for((tier, contents) <- new_multiTier_contents){
-            logger.info("Add Contents from Tier: %s, to all_contents:  %s\n".format(tier, contents.mkString("\n")))
-            all_contents= all_contents ++ contents
+          var final_optimized_plan: CaerusPlan = caerusPlan
+          if(inter_op_plan.isEmpty){
+            //so now we updated all the contents, will use all the contents, new and old to do one last optimization
+            var all_contents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
+            for((tier, contents) <- new_multiTier_contents){
+              logger.info("Add Contents from Tier: %s, to all_contents:  %s\n".format(tier, contents.mkString("\n")))
+              all_contents= all_contents ++ contents
+            }
+            logger.info("Contents from all the Tiers: %s\n".format(all_contents.mkString("\n")))
+            logger.info("Doing last optimization with all contents from all tiers")
+            final_optimized_plan = optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
           }
-          logger.info("Contents from all the Tiers: %s\n".format(all_contents.mkString("\n")))
-          logger.info("Doing last optimization with all contents from all tiers")
-          val op_plan = optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
-          logger.info("Inter optimized plan: %s".format(inter_op_plan))
-          logger.info("Final optimized plan: %s".format(op_plan))
-          inter_op_plan
+          else {
+            for(tier<-Tier.values.toList.reverse){
+              if(inter_op_plan.keySet.contains(tier)){
+                final_optimized_plan = inter_op_plan(tier)
+                logger.info("optimize plan from tier %s : %s".format(tier, final_optimized_plan))
+              }
+            }
+          }
+          logger.info("Final optimized plan: %s".format(final_optimized_plan))
+          final_optimized_plan
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)
