@@ -541,6 +541,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
           }
           var final_optimized_plan: CaerusPlan = caerusPlan
           if(inter_op_plan.isEmpty){
+            logger.info("No new Contents need to write/update, Doing last optimization with all contents from all tiers")
             //so now we updated all the contents, will use all the contents, new and old to do one last optimization
             var all_contents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
             for((tier, contents) <- new_multiTier_contents){
@@ -548,10 +549,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               all_contents= all_contents ++ contents
             }
             logger.info("Contents from all the Tiers: %s\n".format(all_contents.mkString("\n")))
-            logger.info("Doing last optimization with all contents from all tiers")
             final_optimized_plan = optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
           }
-          else {
+          else { // need to figure out a better way to pick plan, now simply pick plan from higher tier
             for(tier<-Tier.values.toList.reverse){
               if(inter_op_plan.keySet.contains(tier)){
                 final_optimized_plan = inter_op_plan(tier)
