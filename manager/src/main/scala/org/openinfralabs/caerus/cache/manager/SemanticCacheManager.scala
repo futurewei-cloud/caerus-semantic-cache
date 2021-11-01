@@ -87,10 +87,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
 
   private var pathId: Long = 0L
   private val names: mutable.HashMap[String, Candidate] = mutable.HashMap.empty[String, Candidate]
-  private val names_tier: mutable.HashMap[String, Tier] = mutable.HashMap.empty[String, Tier]
+  private val namesTier: mutable.HashMap[String, Tier] = mutable.HashMap.empty[String, Tier]
   private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
-  private val multiTier_contents: mutable.HashMap[Tier, mutable.HashMap[Candidate,String]] = mutable.HashMap.empty[Tier, mutable.HashMap[Candidate,String]]
-  for((tier, path) <- tiers) multiTier_contents(tier) = mutable.HashMap.empty[Candidate,String]
+  private val multiTierContents: mutable.HashMap[Tier, mutable.HashMap[Candidate,String]] = mutable.HashMap.empty[Tier, mutable.HashMap[Candidate,String]]
+  for((tier, path) <- tiers) multiTierContents(tier) = mutable.HashMap.empty[Candidate,String]
   private val reservations: mutable.HashMap[(String,Candidate),String] =
     mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
@@ -245,7 +245,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       names(request.name) = candidate
-      names_tier(request.name) = tier
+      namesTier(request.name) = tier
       reservations((request.clientId,candidate)) = path
       capacity(tier) -= reservedSize
       logger.info("Reserve for candidate:\n%s\nReserved size: %s\tUpdated capacity of tier %s: %s."
@@ -293,9 +293,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         val newCandidate: Candidate = candidate.withNewSizeInfo(newSizeInfo)
         names(request.name) = newCandidate
         contents.put(newCandidate,path)
-        val temp_contents: mutable.HashMap[Candidate,String]  = multiTier_contents(tier)
+        val temp_contents: mutable.HashMap[Candidate,String]  = multiTierContents(tier)
         temp_contents.put(newCandidate,path)
-        multiTier_contents(tier) = temp_contents
+        multiTierContents(tier) = temp_contents
         reverseReferences(path) = Set.empty[String]
         logger.info("Updated Contents: %s\n".format(contents))
       } else {
@@ -356,9 +356,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       logger.info("Reverse References: %s".format(reverseReferences))
       contents.remove(candidate)
       logger.info("Updated Contents: %s\n".format(contents))
-      val temp_contents: mutable.HashMap[Candidate,String]  = multiTier_contents(tier)
+      val temp_contents: mutable.HashMap[Candidate,String]  = multiTierContents(tier)
       temp_contents.remove(candidate)
-      multiTier_contents(tier) = temp_contents
+      multiTierContents(tier) = temp_contents
       logger.info("Update Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, temp_contents))
       Future.successful(DeleteReply(path, format))
     }
@@ -485,9 +485,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val caerusPlan: CaerusPlan = CaerusPlan.fromJSON(request.caerusPlan)
       val availableContents: mutable.Map[Candidate,String] =
         contents.filter(element => !markedForDeletion.contains(element._2))
-      val available_multiTier_contents: mutable.HashMap[Tier, Map[Candidate,String]] = mutable.HashMap.empty[Tier, Map[Candidate,String]]
-      for((tier, contents) <- multiTier_contents){
-        available_multiTier_contents(tier) = contents.filter(element => !markedForDeletion.contains(element._2)).toMap
+      val availableMultiTierContents: mutable.HashMap[Tier, Map[Candidate,String]] = mutable.HashMap.empty[Tier, Map[Candidate,String]]
+      for((tier, contents) <- multiTierContents){
+        availableMultiTierContents(tier) = contents.filter(element => !markedForDeletion.contains(element._2)).toMap
       }
       val optimizedPlan = {
         if (operationMode == Mode.MANUAL_WRITE) {
@@ -503,16 +503,16 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             else
               0L
           }*/
-          val new_multiTier_contents:Map[Tier, Map[Candidate,String]] =planner.optimize(
+          val newMultiTierContents:Map[Tier, Map[Candidate,String]] =planner.optimize(
             caerusPlan,
-            available_multiTier_contents.toMap,
+            availableMultiTierContents.toMap,
             request.candidates.map(Candidate.fromJSON),
             capacity.toMap
           )
           // so now we have new multi-tier contents, and will loop through tiers to issue write and eviction
-          var inter_op_plan: mutable.HashMap[Tier, CaerusPlan] = mutable.HashMap.empty[Tier, CaerusPlan]
-          for((tier,contents) <- available_multiTier_contents ){
-            val newContents = new_multiTier_contents(tier)
+          var interOptimalPlan: mutable.HashMap[Tier, CaerusPlan] = mutable.HashMap.empty[Tier, CaerusPlan]
+          for((tier,contents) <- availableMultiTierContents ){
+            val newContents = newMultiTierContents(tier)
             logger.info("New Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, newContents.mkString("\n")))
             val top_can : Set[Candidate] = newContents.keySet -- contents.keySet
             if(top_can.nonEmpty && top_can.size == 1){ // means we have a new candidate to write
@@ -536,31 +536,31 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               }
               val optimizedPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents, emptyAddReference)
               val backupPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents-topCandidate, emptyAddReference)
-              inter_op_plan(tier) = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
+              interOptimalPlan(tier) = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
             }
           }
-          var final_optimized_plan: CaerusPlan = caerusPlan
-          if(inter_op_plan.isEmpty){
+          var finalOptimizedPlan: CaerusPlan = caerusPlan
+          if(interOptimalPlan.isEmpty){
             logger.info("No new Contents need to write/update, Doing last optimization with all contents from all tiers")
             //so now we updated all the contents, will use all the contents, new and old to do one last optimization
-            var all_contents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
-            for((tier, contents) <- new_multiTier_contents){
-              logger.info("Add Contents from Tier: %s, to all_contents:  %s\n".format(tier, contents.mkString("\n")))
-              all_contents= all_contents ++ contents
+            var allContents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
+            for((tier, contents) <- newMultiTierContents){
+              logger.info("Add Contents from Tier: %s, to allContents:  %s\n".format(tier, contents.mkString("\n")))
+              allContents= allContents ++ contents
             }
-            logger.info("Contents from all the Tiers: %s\n".format(all_contents.mkString("\n")))
-            final_optimized_plan = optimizer.optimize(caerusPlan, all_contents.toMap, emptyAddReference)
+            logger.info("Contents from all the Tiers: %s\n".format(allContents.mkString("\n")))
+            finalOptimizedPlan = optimizer.optimize(caerusPlan, allContents.toMap, emptyAddReference)
           }
           else { // need to figure out a better way to pick plan, now simply pick plan from higher tier
             for(tier<-Tier.values.toList.reverse){
-              if(inter_op_plan.keySet.contains(tier)){
-                final_optimized_plan = inter_op_plan(tier)
-                logger.info("optimize plan from tier %s : %s".format(tier, final_optimized_plan))
+              if(interOptimalPlan.contains(tier)){
+                finalOptimizedPlan = interOptimalPlan(tier)
+                logger.info("optimize plan from tier %s : %s".format(tier, finalOptimizedPlan))
               }
             }
           }
-          logger.info("Final optimized plan: %s".format(final_optimized_plan))
-          final_optimized_plan
+          logger.info("Final optimized plan: %s".format(finalOptimizedPlan))
+          finalOptimizedPlan
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)
