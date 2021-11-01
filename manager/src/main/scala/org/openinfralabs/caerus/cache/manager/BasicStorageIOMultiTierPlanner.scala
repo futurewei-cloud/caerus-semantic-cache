@@ -1,15 +1,13 @@
 package org.openinfralabs.caerus.cache.manager
 
 import org.apache.hadoop.fs.Path
-import org.apache.spark.sql.catalyst.plans.logical.{Filter, Project}
-import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common.plans._
 import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, Repartitioning, Tier}
 import org.slf4j.{Logger, LoggerFactory}
 
 import scala.collection.mutable
 
-case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predictor, tiers: Map[Tier, String]) extends Planner {
+case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predictor, tiers: Map[Tier.Tier, String]) extends Planner {
   private final val logger: Logger = LoggerFactory.getLogger(this.getClass)
 
   //private def emptyAddReference(path: String): Unit = {}
@@ -128,23 +126,23 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
 
   override def optimize(
     plan: CaerusPlan,
-    all_contents: Map[Tier, Map[Candidate,String]],
+    allContents: Map[Tier.Tier, Map[Candidate,String]],
     candidates: Seq[Candidate],
-    capacity: Map[Tier, Long]
-  ): Map[Tier, Map[Candidate,String]] = {
-    val new_multitier_contents: mutable.HashMap[Tier, Map[Candidate,String]] = mutable.HashMap.empty[Tier, Map[Candidate,String]]
+    capacity: Map[Tier.Tier, Long]
+  ): Map[Tier.Tier, Map[Candidate,String]] = {
+    val newMultitierContents: mutable.HashMap[Tier.Tier, Map[Candidate,String]] = mutable.HashMap.empty[Tier.Tier, Map[Candidate,String]]
     logger.info("Initial candidates:\n%s\n".format(candidates.mkString("\n")))
 
     // Get future plans.
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
     logger.info("Predictions:\n%s".format(plans.mkString("\n")))
-    var all_candidates: Seq[Candidate] = candidates
+    var allCandidates: Seq[Candidate] = candidates
     for(tier <- Tier.values){
-      if(all_contents.keySet.contains(tier)){
-        val contents = all_contents(tier)
+      if(allContents.contains(tier)){
+        val contents = allContents(tier)
         logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
-        logger.info("existing candidates size:\n%s\n".format(all_candidates.size))
-        val remainingCandidates: Seq[Candidate] = all_candidates.filter(!contents.contains(_)).filter(candidate => {
+        logger.info("existing candidates size:\n%s\n".format(allCandidates.size))
+        val remainingCandidates: Seq[Candidate] = allCandidates.filter(!contents.contains(_)).filter(candidate => {
           val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
           optimizer.optimize(plan, contents + ((candidate, "temp")), addReference(tempReferences))
           tempReferences.contains("temp")
@@ -171,7 +169,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
           var newCost: Long = costs(topCandidateIndex)
           if (newCost - initialCost >= 0) {
             logger.info("No positive candidate found. No content change")
-            new_multitier_contents(tier) = contents
+            newMultitierContents(tier) = contents
 
           } else {
             logger.info("Top candidate: %s".format(topCandidate))
@@ -188,18 +186,23 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
               newContents -= bottomCandidate
               newSize -= bottomCandidate.sizeInfo.get.writeSize
             }
-            logger.info("New contents:\n%s".format(newContents.mkString("\n")))
-            new_multitier_contents(tier) = newContents
-            // if the topcandidate is been added, remove it from list
-            all_candidates = all_candidates.filterNot(candidate => candidate.equals(topCandidate))
+            if(newContents.contains(topCandidate)) {
+              logger.info("New contents:\n%s".format(newContents.mkString("\n")))
+              newMultitierContents(tier) = newContents
+              // if the topcandidate is been added, remove it from list
+              allCandidates = allCandidates.filterNot(candidate => candidate.equals(topCandidate))
+            }else{
+              // if topcandidate is removed, we will not update contents
+              newMultitierContents(tier) = contents
+            }
           }
         }
         else{
           logger.info("No remain candidate found. No content change")
-          new_multitier_contents(tier) = contents
+          newMultitierContents(tier) = contents
         }
       }
     }
-    new_multitier_contents.toMap
+    newMultitierContents.toMap
   }
 }

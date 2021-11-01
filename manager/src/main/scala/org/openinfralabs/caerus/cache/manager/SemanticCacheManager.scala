@@ -62,7 +62,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
   // print out tier configuration for mode3
   if (operationMode == Mode.FULLY_AUTOMATIC && tiers.size >1) {
     logger.info("Tiers info for Mode 3")
-    for((tier, path) <- tiers) logger.info("Tier: %s, Path: %s".format(tier, path))
+    tiers.foreach(tierPair=>logger.info("Tier: %s, Path: %s".format(tierPair._1, tierPair._2)))
   }
   // disable this since we now try to support multi-tier
   /*
