@@ -545,7 +545,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               }
               val optimizedPlan: CaerusPlan = optimizer.optimize(initialOptimizedPlan, newContents, emptyAddReference)
               val backupPlan: CaerusPlan = optimizer.optimize(initialOptimizedPlan, newContents-topCandidate, emptyAddReference)
-              interOptimalPlan(tier) = insertCaerusWrite(initialOptimizedPlan, backupPlan, caerusWrite, caerusDelete)
+              interOptimalPlan(tier) = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
             }
           }
           var finalOptimizedPlan: CaerusPlan = initialOptimizedPlan
