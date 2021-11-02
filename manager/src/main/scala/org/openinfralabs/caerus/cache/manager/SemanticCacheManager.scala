@@ -503,7 +503,16 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             else
               0L
           }*/
-          val newMultiTierContents:Map[Tier, Map[Candidate,String]] =planner.optimize(
+          val initialOptimizedPlan:CaerusPlan = {
+            var allContents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
+            for((tier, contents) <- availableMultiTierContents){
+              allContents= allContents ++ contents
+            }
+            optimizer.optimize(caerusPlan, allContents.toMap, emptyAddReference)
+          }
+          logger.info("Initial optimized plan without candidate: %s".format(initialOptimizedPlan))
+
+          val newMultiTierContents:Map[Tier, Map[Candidate,String]] = planner.optimize(
             caerusPlan,
             availableMultiTierContents.toMap,
             request.candidates.map(Candidate.fromJSON),
@@ -534,12 +543,12 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               } else {
                 None
               }
-              val optimizedPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents, emptyAddReference)
-              val backupPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents-topCandidate, emptyAddReference)
-              interOptimalPlan(tier) = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
+              val optimizedPlan: CaerusPlan = optimizer.optimize(initialOptimizedPlan, newContents, emptyAddReference)
+              val backupPlan: CaerusPlan = optimizer.optimize(initialOptimizedPlan, newContents-topCandidate, emptyAddReference)
+              interOptimalPlan(tier) = insertCaerusWrite(initialOptimizedPlan, backupPlan, caerusWrite, caerusDelete)
             }
           }
-          var finalOptimizedPlan: CaerusPlan = caerusPlan
+          var finalOptimizedPlan: CaerusPlan = initialOptimizedPlan
           if(interOptimalPlan.isEmpty){
             logger.info("No new Contents need to write/update, Doing last optimization with all contents from all tiers")
             //so now we updated all the contents, will use all the contents, new and old to do one last optimization
