@@ -503,13 +503,14 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             else
               0L
           }*/
-          val initialOptimizedPlan:CaerusPlan = {
+        /*  val initialOptimizedPlan:CaerusPlan = {
             var allContents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
             for((tier, contents) <- availableMultiTierContents){
               allContents= allContents ++ contents
             }
             optimizer.optimize(caerusPlan, allContents.toMap, emptyAddReference)
-          }
+          }*/
+        val initialOptimizedPlan:CaerusPlan = caerusPlan
           logger.info("Initial optimized plan without candidate: %s".format(initialOptimizedPlan))
 
           val newMultiTierContents:Map[Tier, Map[Candidate,String]] = planner.optimize(
@@ -543,8 +544,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
               } else {
                 None
               }
-              val optimizedPlan: CaerusPlan = optimizer.optimize(initialOptimizedPlan, newContents, emptyAddReference)
-              val backupPlan: CaerusPlan = optimizer.optimize(initialOptimizedPlan, newContents-topCandidate, emptyAddReference)
+              val optimizedPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents, emptyAddReference)
+              val backupPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents-topCandidate, emptyAddReference)
               interOptimalPlan(tier) = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
             }
           }
