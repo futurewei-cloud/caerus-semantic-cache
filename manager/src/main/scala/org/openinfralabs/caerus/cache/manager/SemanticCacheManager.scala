@@ -557,10 +557,14 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             for((tier, contents) <- newMultiTierContents){
               logger.info("Add Contents from Tier: %s, to allContents:  %s\n".format(tier, contents.mkString("\n")))
               for((c, p)<-contents){
+                if(allContents.contains(c)) {
+                  logger.info("Content already exist: %s".format(c))
+                  allContents.remove(c)
+                }
                 allContents(c) = p
               }
             }
-            logger.info("Contents from all the Tiers: %s\n".format(allContents.mkString("\n")))
+            logger.info("Contents from all the Tiers: %s\n".format(allContents.toMap.mkString("\n")))
             finalOptimizedPlan = optimizer.optimize(caerusPlan, allContents.toMap, emptyAddReference)
           }
           else { // need to figure out a better way to pick plan, now simply pick plan from higher tier
