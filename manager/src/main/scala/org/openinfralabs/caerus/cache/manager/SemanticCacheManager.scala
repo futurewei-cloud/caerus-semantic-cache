@@ -556,7 +556,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             var allContents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
             for((tier, contents) <- newMultiTierContents){
               logger.info("Add Contents from Tier: %s, to allContents:  %s\n".format(tier, contents.mkString("\n")))
-              allContents= allContents ++ contents
+              for((c, p)<-contents){
+                allContents(c) = p
+              }
             }
             logger.info("Contents from all the Tiers: %s\n".format(allContents.mkString("\n")))
             finalOptimizedPlan = optimizer.optimize(caerusPlan, allContents.toMap, emptyAddReference)
