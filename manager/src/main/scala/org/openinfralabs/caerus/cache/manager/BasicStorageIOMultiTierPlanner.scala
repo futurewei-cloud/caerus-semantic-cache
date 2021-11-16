@@ -131,7 +131,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     capacity: Map[Tier.Tier, Long]
   ): Map[Tier.Tier, Map[Candidate,String]] = {
     val newMultitierContents: mutable.HashMap[Tier.Tier, Map[Candidate,String]] = mutable.HashMap.empty[Tier.Tier, Map[Candidate,String]]
-    logger.info("Initial candidates:\n%s\n".format(candidates.mkString("\n")))
+    logger.info("Initial %s candidates:\n%s\n".format(candidates.size, candidates.mkString("\n")))
 
     // Get future plans.
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
@@ -140,6 +140,10 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     for(tier <- Tier.values){
       if(allContents.contains(tier)){
         val contents = allContents(tier)
+        // contents.foreach( co => {allCandidates = allCandidates.filterNot(candidate => candidate.equals(co._1))} )
+        for((ca, p) <- contents) {
+          allCandidates = allCandidates.filterNot(candidate => candidate.equals(ca))
+        }
         logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
         logger.info("existing candidates size:\n%s\n".format(allCandidates.size))
         val remainingCandidates: Seq[Candidate] = allCandidates.filter(!contents.contains(_)).filter(candidate => {
