@@ -34,44 +34,53 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
 
   private def calculateCacheStorageIOCost(
     contents: Map[Candidate,String],
-    references: Map[String,Long]
+    references: Map[String,Long], tier: Tier.Tier
   ): Long = {
     var cost: Long = 0L
+    val readSizeFactor: Long = tier match {
+      case Tier.COMPUTE_MEMORY => 6
+      case _ => 1
+    }
     contents.keys.foreach(candidate => {
       val path: String = contents(candidate)
       if (references.contains(path)) {
         val numRefs: Long = references(path)
         // TODO: This needs to change according to what filters are issued after this load.
-        cost += numRefs * candidate.sizeInfo.get.readSizeInfo.getSize(0,0)
+        cost += numRefs * candidate.sizeInfo.get.readSizeInfo.getSize(0,0)/readSizeFactor
       }
     })
     cost
   }
 
-  private def findCost(contents: Map[Candidate,String], plans: Seq[CaerusPlan]): Long = {
+  private def findCost(contents: Map[Candidate,String], plans: Seq[CaerusPlan], tier: Tier.Tier): Long = {
     val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
     val storageSourceIOCost: Long = plans.map(plan => {
       val optimizedPlan: CaerusPlan = optimizer.optimize(plan, contents, addReference(tempReferences))
       calculateSourceStorageIOCost(optimizedPlan)
     }).sum
-    storageSourceIOCost + calculateCacheStorageIOCost(contents, tempReferences.toMap)
+    storageSourceIOCost + calculateCacheStorageIOCost(contents, tempReferences.toMap, tier)
   }
 
-  private def findSourceReadSize(contents: Map[Candidate,String], candidate: Candidate): Long = {
+  private def findSourceReadSize(contents: Map[Candidate,String], candidate: Candidate, tier: Tier.Tier): Long = {
+    val readSizeFactor: Long = tier match {
+      case Tier.COMPUTE_MEMORY => 6
+      case _ => 1
+    }
     candidate match {
-      case Repartitioning(source, _, _) => source.size
-      case FileSkippingIndexing(source, _, _) => source.size
-      case Caching(plan, _) => findCost(contents, Seq(plan))
+      case Repartitioning(source, _, _) => source.size/readSizeFactor
+      case FileSkippingIndexing(source, _, _) => source.size/readSizeFactor
+      case Caching(plan, _) => findCost(contents, Seq(plan), tier)
     }
   }
 
   private def findBottomCandidate(
     contents: Map[Candidate,String],
     plans: Seq[CaerusPlan],
-    cost: Long
+    cost: Long,
+    tier: Tier.Tier
   ): (Candidate,Long) = {
     val candidates: Seq[Candidate] = contents.keys.toSeq
-    val costs: Seq[Long] = candidates.map(candidate => findCost(contents-candidate, plans))
+    val costs: Seq[Long] = candidates.map(candidate => findCost(contents-candidate, plans, tier))
     val benefits: Seq[Long] = costs.map(newCost => newCost - cost)
     val benefitsPerByte: Seq[Long] = benefits.indices.map(i => benefits(i)/candidates(i).sizeInfo.get.writeSize)
     val bottomCandidateIndex: Int = benefitsPerByte.zipWithIndex.minBy(_._1)._2
@@ -153,13 +162,13 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         })
         logger.info("Remaining candidates:\n%s".format(remainingCandidates.mkString("\n")))
         if (remainingCandidates.nonEmpty) {
-          val initialCost: Long = findCost(contents, plans)
+          val initialCost: Long = findCost(contents, plans, tier)
           logger.info("Initial I/O: %s MiB".format(initialCost / (1024 * 1024)))
 
           // Find candidate per byte benefit.
           val costs: Seq[Long] = remainingCandidates.map(candidate => {
-            findCost(contents + ((candidate, "temp")), plans) +
-              findSourceReadSize(contents, candidate) +
+            findCost(contents + ((candidate, "temp")), plans, tier) +
+              findSourceReadSize(contents, candidate, tier) +
               candidate.sizeInfo.get.writeSize
           })
           val benefits: Seq[Long] = costs.map(cost => initialCost - cost)
@@ -184,7 +193,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
             var newSize: Long = newContents.keys.map(candidate => candidate.sizeInfo.get.writeSize).sum
             while (newSize > capacity(tier)) {
               logger.warn("Capacity is not big enough to hold an extra candidate. Do not change anything.")
-              val bottomCandidateInfo: (Candidate, Long) = findBottomCandidate(newContents, plans, newCost)
+              val bottomCandidateInfo: (Candidate, Long) = findBottomCandidate(newContents, plans, newCost, tier)
               val bottomCandidate: Candidate = bottomCandidateInfo._1
               newCost = bottomCandidateInfo._2
               newContents -= bottomCandidate
