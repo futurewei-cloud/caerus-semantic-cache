@@ -41,6 +41,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
       case Tier.COMPUTE_MEMORY => 6
       case _ => 1
     }
+    logger.info("in calculateCacheStorageIOCost, readSizeFactor is %s".format(readSizeFactor))
     contents.keys.foreach(candidate => {
       val path: String = contents(candidate)
       if (references.contains(path)) {
@@ -66,6 +67,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
       case Tier.COMPUTE_MEMORY => 6
       case _ => 1
     }
+    logger.info("in findSourceReadSize, readSizeFactor is %s".format(readSizeFactor))
     candidate match {
       case Repartitioning(source, _, _) => source.size/readSizeFactor
       case FileSkippingIndexing(source, _, _) => source.size/readSizeFactor
