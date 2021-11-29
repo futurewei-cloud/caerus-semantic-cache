@@ -32,15 +32,20 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     cost
   }
 
+  private def getReadSizeFactor(
+    tier: Tier.Tier): Long = {
+    tier match {
+      case Tier.COMPUTE_MEMORY => 6
+      case _ => 1
+    }
+  }
+
   private def calculateCacheStorageIOCost(
     contents: Map[Candidate,String],
     references: Map[String,Long], tier: Tier.Tier
   ): Long = {
     var cost: Long = 0L
-    val readSizeFactor: Long = tier match {
-      case Tier.COMPUTE_MEMORY => 6
-      case _ => 1
-    }
+    val readSizeFactor: Long = getReadSizeFactor(tier)
     logger.info("in calculateCacheStorageIOCost, readSizeFactor is %s".format(readSizeFactor))
     contents.keys.foreach(candidate => {
       val path: String = contents(candidate)
@@ -63,10 +68,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
   }
 
   private def findSourceReadSize(contents: Map[Candidate,String], candidate: Candidate, tier: Tier.Tier): Long = {
-    val readSizeFactor: Long = tier match {
-      case Tier.COMPUTE_MEMORY => 6
-      case _ => 1
-    }
+    val readSizeFactor: Long = getReadSizeFactor(tier)
     logger.info("in findSourceReadSize, readSizeFactor is %s".format(readSizeFactor))
     candidate match {
       case Repartitioning(source, _, _) => source.size/readSizeFactor
@@ -135,6 +137,16 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     }
   }*/
 
+  private def selectCandidates(candidates: Seq[Candidate]): Seq[Candidate]={
+    var newCandidates: Seq[Candidate] = Seq[Candidate]()
+    for(candidate <- candidates){
+      candidate match {
+        case Caching(_,_) => newCandidates = newCandidates :+ candidate
+        case _ => None
+      }
+    }
+    newCandidates
+  }
   override def optimize(
     plan: CaerusPlan,
     allContents: Map[Tier.Tier, Map[Candidate,String]],
@@ -147,7 +159,9 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     // Get future plans.
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
     logger.info("Predictions:\n%s".format(plans.mkString("\n")))
-    var allCandidates: Seq[Candidate] = candidates
+    //var allCandidates: Seq[Candidate] = candidates
+    var allCandidates: Seq[Candidate] = selectCandidates(candidates)
+    logger.info("All candidates after update:\n%s\n".format(allCandidates.mkString("\n")))
     for(tier <- Tier.values){
       if(allContents.contains(tier)){
         val contents = allContents(tier)
@@ -182,6 +196,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
           val topCandidateIndex: Int = benefitsPerByte.zipWithIndex.maxBy(_._1)._2
           val topCandidate = remainingCandidates(topCandidateIndex)
           var newCost: Long = costs(topCandidateIndex)
+          logger.info("New I/O: %s MiB".format(newCost / (1024 * 1024)))
           if (newCost - initialCost >= 0) {
             logger.info("No positive candidate found. No content change")
             newMultitierContents(tier) = contents
