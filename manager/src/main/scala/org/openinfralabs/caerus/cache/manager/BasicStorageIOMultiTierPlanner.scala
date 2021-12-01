@@ -203,7 +203,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
 
           } else {
             logger.info("Top candidate: %s".format(topCandidate))
-
+            logger.info(" more info about the top candidate, Costs: %s, benefits: %s".format(costs.mkString(", "), benefits.mkString(", ")))
             val topCandidateName: String = getName(topCandidate)
             val topCandidatePath: String = tiers(tier) + Path.SEPARATOR + topCandidateName
             var newContents = contents + ((topCandidate, topCandidatePath))
