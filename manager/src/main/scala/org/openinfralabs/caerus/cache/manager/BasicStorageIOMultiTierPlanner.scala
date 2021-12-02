@@ -159,8 +159,8 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     // Get future plans.
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
     logger.info("Predictions:\n%s".format(plans.mkString("\n")))
-    //var allCandidates: Seq[Candidate] = candidates
-    var allCandidates: Seq[Candidate] = selectCandidates(candidates)
+    var allCandidates: Seq[Candidate] = candidates
+    //var allCandidates: Seq[Candidate] = selectCandidates(candidates)
     logger.info("All candidates after update:\n%s\n".format(allCandidates.mkString("\n")))
     for(tier <- Tier.values){
       if(allContents.contains(tier)){
