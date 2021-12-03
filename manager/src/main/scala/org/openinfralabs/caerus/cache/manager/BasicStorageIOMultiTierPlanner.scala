@@ -195,10 +195,10 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
       if(allContents.contains(tier)){
         val contents = allContents(tier)
         // contents.foreach( co => {allCandidates = allCandidates.filterNot(candidate => candidate.equals(co._1))} )
+        allCandidates = selectCandidates(candidates, tier = Some(tier))
         for((ca, p) <- contents) {
           allCandidates = allCandidates.filterNot(candidate => candidate.equals(ca))
         }
-        allCandidates = selectCandidates(allCandidates, tier = Some(tier))
         logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
         logger.info("existing candidates for Tier %s: \n%s\n".format(tier, allCandidates.mkString("\n")))
         val remainingCandidates: Seq[Candidate] = allCandidates.filter(!contents.contains(_)).filter(candidate => {
