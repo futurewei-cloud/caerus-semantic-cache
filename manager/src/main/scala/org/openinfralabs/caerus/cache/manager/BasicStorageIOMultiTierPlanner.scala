@@ -162,7 +162,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
       case Some(Tier.STORAGE_DISK) =>{
         for(candidate <- candidates){
           candidate match {
-            case Repartitioning(source, index, repSizeInfo) => newCandidates :+ candidate
+            case Repartitioning(source, index, repSizeInfo) => newCandidates = newCandidates :+ candidate
             case _ =>  None
           }
         }
