@@ -142,6 +142,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     var newCandidates: Seq[Candidate] = Seq[Candidate]()
     tier match {
       case None=>{
+        logger.info("selectCandidates in None")
         for(candidate <- candidates){
           candidate match {
             case Caching(plan, cachingSizeInfo) => newCandidates = newCandidates :+ candidate
@@ -150,6 +151,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         }
       }
       case Tier.COMPUTE_MEMORY =>{
+        logger.info("selectCandidates in COMPUTE_MEMORY")
         for(candidate <- candidates){
           candidate match {
             case Caching(_,_) => newCandidates = newCandidates :+ candidate
@@ -159,6 +161,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         }
       }
       case Tier.STORAGE_DISK =>{
+        logger.info("selectCandidates in STORAGE_DISK")
         for(candidate <- candidates){
           candidate match {
             case Repartitioning(source, index, repSizeInfo) => newCandidates :+ candidate
@@ -167,6 +170,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         }
       }
       case _ =>{
+        logger.info("selectCandidates in Else")
         for(candidate <- candidates){
           newCandidates = newCandidates :+ candidate
         }
@@ -196,7 +200,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         for((ca, p) <- contents) {
           allCandidates = allCandidates.filterNot(candidate => candidate.equals(ca))
         }
-        allCandidates = selectCandidates(allCandidates, Some(tier))
+        allCandidates = selectCandidates(allCandidates, tier = Some(tier))
         logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
         logger.info("existing candidates for Tier %s: %s\n".format(tier, allCandidates.mkString("\n")))
         val remainingCandidates: Seq[Candidate] = allCandidates.filter(!contents.contains(_)).filter(candidate => {
