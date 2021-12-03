@@ -138,7 +138,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     }
   }*/
 
-  private def selectCandidates(candidates: Seq[Candidate], tier: Option[Tier.Tier] = None): Seq[Candidate]={
+  private def selectCandidates(candidates: Seq[Candidate], tier: Option[Tier.Value] = None): Seq[Candidate]={
     var newCandidates: Seq[Candidate] = Seq[Candidate]()
     tier match {
       case None=>{
