@@ -143,7 +143,6 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     logger.info("selectCandidates tier %s".format(tier))
     tier match {
       case None=>{
-        logger.info("selectCandidates in None")
         for(candidate <- candidates){
           candidate match {
             case Caching(plan, cachingSizeInfo) => newCandidates = newCandidates :+ candidate
@@ -152,7 +151,6 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         }
       }
       case Some(Tier.COMPUTE_MEMORY) =>{
-        logger.info("selectCandidates in COMPUTE_MEMORY")
         for(candidate <- candidates){
           candidate match {
             case Caching(_,_) => newCandidates = newCandidates :+ candidate
@@ -162,7 +160,6 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         }
       }
       case Some(Tier.STORAGE_DISK) =>{
-        logger.info("selectCandidates in STORAGE_DISK")
         for(candidate <- candidates){
           candidate match {
             case Repartitioning(source, index, repSizeInfo) => newCandidates :+ candidate
@@ -203,7 +200,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         }
         allCandidates = selectCandidates(allCandidates, tier = Some(tier))
         logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
-        logger.info("existing candidates for Tier %s: %s\n".format(tier, allCandidates.mkString("\n")))
+        logger.info("existing candidates for Tier %s: \n%s\n".format(tier, allCandidates.mkString("\n")))
         val remainingCandidates: Seq[Candidate] = allCandidates.filter(!contents.contains(_)).filter(candidate => {
           val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
           optimizer.optimize(plan, contents + ((candidate, "temp")), addReference(tempReferences))
