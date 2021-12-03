@@ -140,6 +140,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
 
   private def selectCandidates(candidates: Seq[Candidate], tier: Option[Tier.Value] = None): Seq[Candidate]={
     var newCandidates: Seq[Candidate] = Seq[Candidate]()
+    logger.info("selectCandidates tier %s".format(tier))
     tier match {
       case None=>{
         logger.info("selectCandidates in None")
