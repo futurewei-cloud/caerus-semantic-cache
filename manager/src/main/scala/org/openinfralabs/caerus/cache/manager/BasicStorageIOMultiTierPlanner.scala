@@ -52,9 +52,10 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
       if (references.contains(path)) {
         val numRefs: Long = references(path)
         // TODO: This needs to change according to what filters are issued after this load.
-        cost += numRefs * candidate.sizeInfo.get.readSizeInfo.getSize(0,0)/readSizeFactor
+        cost += numRefs * candidate.sizeInfo.get.readSizeInfo.getSize(0,0)
       }
     })
+    cost = cost/readSizeFactor
     cost
   }
 
@@ -71,7 +72,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     val readSizeFactor: Long = getReadSizeFactor(tier)
     logger.info("in findSourceReadSize, readSizeFactor is %s".format(readSizeFactor))
     candidate match {
-      case Repartitioning(source, _, _) => source.size/readSizeFactor
+      case Repartitioning(source, _, _) => source.size
       case FileSkippingIndexing(source, _, _) => source.size/readSizeFactor
       case Caching(plan, _) => findCost(contents, Seq(plan), tier)
     }
@@ -137,12 +138,38 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     }
   }*/
 
-  private def selectCandidates(candidates: Seq[Candidate]): Seq[Candidate]={
+  private def selectCandidates(candidates: Seq[Candidate], tier: Option[Tier.Tier] = None): Seq[Candidate]={
     var newCandidates: Seq[Candidate] = Seq[Candidate]()
-    for(candidate <- candidates){
-      candidate match {
-        case Caching(_,_) => newCandidates = newCandidates :+ candidate
-        case _ => None
+    tier match {
+      case None=>{
+        for(candidate <- candidates){
+          candidate match {
+            case Caching(plan, cachingSizeInfo) => newCandidates = newCandidates :+ candidate
+            case _ => None
+          }
+        }
+      }
+      case Tier.COMPUTE_MEMORY =>{
+        for(candidate <- candidates){
+          candidate match {
+            case Caching(_,_) => newCandidates = newCandidates :+ candidate
+            case FileSkippingIndexing(source, index, fsSizeInfo) => newCandidates = newCandidates :+ candidate
+            case _ => None
+          }
+        }
+      }
+      case Tier.STORAGE_DISK =>{
+        for(candidate <- candidates){
+          candidate match {
+            case Repartitioning(source, index, repSizeInfo) => newCandidates :+ candidate
+            case _ =>  None
+          }
+        }
+      }
+      case _ =>{
+        for(candidate <- candidates){
+          newCandidates = newCandidates :+ candidate
+        }
       }
     }
     newCandidates
@@ -160,7 +187,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
     logger.info("Predictions:\n%s".format(plans.mkString("\n")))
     var allCandidates: Seq[Candidate] = candidates
-    //var allCandidates: Seq[Candidate] = selectCandidates(candidates)
+    // var allCandidates: Seq[Candidate] = selectCandidates(candidates)
     logger.info("All candidates after update:\n%s\n".format(allCandidates.mkString("\n")))
     for(tier <- Tier.values){
       if(allContents.contains(tier)){
@@ -169,8 +196,9 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
         for((ca, p) <- contents) {
           allCandidates = allCandidates.filterNot(candidate => candidate.equals(ca))
         }
+        allCandidates = selectCandidates(allCandidates, Some(tier))
         logger.info("existing contents for Tier %s: %s\n".format(tier, contents.mkString("\n")))
-        logger.info("existing candidates size:\n%s\n".format(allCandidates.size))
+        logger.info("existing candidates for Tier %s: %s\n".format(tier, allCandidates.mkString("\n")))
         val remainingCandidates: Seq[Candidate] = allCandidates.filter(!contents.contains(_)).filter(candidate => {
           val tempReferences: mutable.HashMap[String,Long] = mutable.HashMap.empty[String,Long]
           optimizer.optimize(plan, contents + ((candidate, "temp")), addReference(tempReferences))
@@ -199,6 +227,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
           logger.info("New I/O: %s MiB".format(newCost / (1024 * 1024)))
           if (newCost - initialCost >= 0) {
             logger.info("No positive candidate found. No content change")
+            logger.info("More info about remain candidates, Costs: %s, benefits: %s".format(costs.mkString(", "), benefits.mkString(", ")))
             newMultitierContents(tier) = contents
 
           } else {
