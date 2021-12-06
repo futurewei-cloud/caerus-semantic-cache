@@ -73,7 +73,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     logger.info("in findSourceReadSize, readSizeFactor is %s".format(readSizeFactor))
     candidate match {
       case Repartitioning(source, _, _) => source.size
-      case FileSkippingIndexing(source, _, _) => source.size/readSizeFactor
+      case FileSkippingIndexing(source, _, _) => source.size
       case Caching(plan, _) => findCost(contents, Seq(plan), tier)
     }
   }
@@ -189,13 +189,13 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
     val plans: Seq[CaerusPlan] = plan +: predictor.getPredictions(plan)
     logger.info("Predictions:\n%s".format(plans.mkString("\n")))
     var allCandidates: Seq[Candidate] = candidates
-    // var allCandidates: Seq[Candidate] = selectCandidates(candidates)
+    var allowedCandidates: Seq[Candidate] = selectCandidates(candidates)
     logger.info("All candidates after update:\n%s\n".format(allCandidates.mkString("\n")))
     for(tier <- Tier.values){
       if(allContents.contains(tier)){
         val contents = allContents(tier)
         // contents.foreach( co => {allCandidates = allCandidates.filterNot(candidate => candidate.equals(co._1))} )
-        allCandidates = selectCandidates(candidates, tier = Some(tier))
+        allCandidates = selectCandidates(allowedCandidates, tier = Some(tier))
         for((ca, p) <- contents) {
           allCandidates = allCandidates.filterNot(candidate => candidate.equals(ca))
         }
