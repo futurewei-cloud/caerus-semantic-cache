@@ -145,7 +145,7 @@ case class BasicStorageIOMultiTierPlanner(optimizer: Optimizer, predictor: Predi
       case None=>{
         for(candidate <- candidates){
           candidate match {
-            case Caching(plan, cachingSizeInfo) => newCandidates = newCandidates :+ candidate
+            case FileSkippingIndexing(source, index, fsSizeInfo) => newCandidates = newCandidates :+ candidate
             case _ => None
           }
         }
