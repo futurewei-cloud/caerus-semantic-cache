@@ -4,13 +4,14 @@ import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import io.grpc.{Server, ServerBuilder}
 import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.catalyst.plans.logical.{Filter, Project}
 import org.openinfralabs.caerus.cache.common.Mode.Mode
 import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common._
-import org.openinfralabs.caerus.cache.common.plans.{CaerusLoadWithIndices, CaerusPlan}
+import org.openinfralabs.caerus.cache.common.plans.{CaerusCacheLoad, CaerusCaching, CaerusDelete, CaerusFileSkippingIndexing, CaerusIf, CaerusLoadWithIndices, CaerusPlan, CaerusRepartitioning, CaerusWrite}
 import org.openinfralabs.caerus.cache.grpc.service._
 
-import scala.collection.mutable
+import scala.collection.{breakOut, mutable}
 import scala.concurrent.{ExecutionContext, Future}
 import scala.io.Source
 
@@ -21,10 +22,10 @@ import scala.io.Source
  */
 class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends LazyLogging {
   private val tierNames: Map[String, Tier] = Map(
-    "compute-memory" -> Tier.COMPUTE_MEMORY,
-    "compute-disk" -> Tier.COMPUTE_DISK,
+    "storage-disk" -> Tier.STORAGE_DISK,
     "storage-memory" -> Tier.STORAGE_MEMORY,
-    "storage-disk" -> Tier.STORAGE_DISK
+    "compute-disk" -> Tier.COMPUTE_DISK,
+    "compute-memory" -> Tier.COMPUTE_MEMORY
   )
   private val tiers: mutable.HashMap[Tier, String] = mutable.HashMap.empty[Tier, String]
   private val capacity: mutable.HashMap[Tier, Long] = mutable.HashMap.empty[Tier, Long]
@@ -58,10 +59,17 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       Mode(3)
     }
   }
+  // print out tier configuration for mode3
+  if (operationMode == Mode.FULLY_AUTOMATIC && tiers.size >1) {
+    logger.info("Tiers info for Mode 3")
+    tiers.foreach(tierPair=>logger.info("Tier: %s, Path: %s".format(tierPair._1, tierPair._2)))
+  }
+  // disable this since we now try to support multi-tier
+  /*
   if (operationMode == Mode.FULLY_AUTOMATIC && (tiers.size > 1 || !tiers.contains(Tier.STORAGE_DISK))) {
     logger.error("Operation mode 3 cannot be defined with multiple tiers. Only with STORAGE_DISK.")
     System.exit(-1)
-  }
+  }*/
 
   private val port: Int = {
     if (conf.hasPath("server.port"))
@@ -79,7 +87,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
 
   private var pathId: Long = 0L
   private val names: mutable.HashMap[String, Candidate] = mutable.HashMap.empty[String, Candidate]
+  private val namesTier: mutable.HashMap[String, Tier] = mutable.HashMap.empty[String, Tier]
   private val contents: mutable.HashMap[Candidate,String] = mutable.HashMap.empty[Candidate,String]
+  private val multiTierContents: mutable.HashMap[Tier, mutable.HashMap[Candidate,String]] = mutable.HashMap.empty[Tier, mutable.HashMap[Candidate,String]]
+  for((tier, path) <- tiers) multiTierContents(tier) = mutable.HashMap.empty[Candidate,String]
   private val reservations: mutable.HashMap[(String,Candidate),String] =
     mutable.HashMap.empty[(String,Candidate),String]
   private val markedForDeletion: mutable.HashSet[String] = mutable.HashSet.empty[String]
@@ -103,7 +114,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     else
       "none"
   }
-  private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
+  // private val planner: Planner = BasicStorageIOPlanner(optimizer, predictor, outputPath)
+  private val planner: Planner = BasicStorageIOMultiTierPlanner(optimizer, predictor,tiers.toMap)
   private var server: Option[Server] = None
   private val references: mutable.HashMap[String, Set[String]] = mutable.HashMap.empty[String, Set[String]]
   private val registeredClients: mutable.HashMap[String, Long] = mutable.HashMap.empty[String, Long]
@@ -186,6 +198,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     references(clientId) = references(clientId) + path
   }
 
+  private def emptyAddReference(path: String): Unit = {}
+
   private class SemanticCacheService extends SemanticCacheServiceGrpc.SemanticCacheService {
     /**
      * Semantic Cache Administrator API. Reservation RPC.
@@ -199,8 +213,12 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       registeredClients(request.clientId) = System.currentTimeMillis()
       val candidate: Candidate = Candidate.fromJSON(request.candidate)
       val reservedSize: Long = candidate.sizeInfo.get.writeSize
-      val tier: Tier = Tier(request.tier)
-      val path = try {
+      val path = request.name
+      val tier: Tier = getTierFromPath(path)
+      //val tier: Tier = Tier(request.tier)
+
+      logger.info("input parameters for reserve, candidate: %s, tier:%s, name: %s".format(candidate.toString,tier,request.name))
+      /*val path = try {
         if (operationMode == Mode.FULLY_AUTOMATIC || operationMode == Mode.MANUAL_EVICTION)
           getPath(request.name, tier)
         else
@@ -209,7 +227,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         case e: Exception =>
           logger.warn(e.getMessage)
           return Future.failed(e)
-      }
+      }*/
       if (names.contains(request.name)) {
         val message: String = "Name %s is already used for cached or reserved contents.".format(request.name)
         logger.warn(message)
@@ -227,6 +245,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         return Future.failed(new RuntimeException(message))
       }
       names(request.name) = candidate
+      namesTier(request.name) = tier
       reservations((request.clientId,candidate)) = path
       capacity(tier) -= reservedSize
       logger.info("Reserve for candidate:\n%s\nReserved size: %s\tUpdated capacity of tier %s: %s."
@@ -274,6 +293,9 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
         val newCandidate: Candidate = candidate.withNewSizeInfo(newSizeInfo)
         names(request.name) = newCandidate
         contents.put(newCandidate,path)
+        val temp_contents: mutable.HashMap[Candidate,String]  = multiTierContents(tier)
+        temp_contents.put(newCandidate,path)
+        multiTierContents(tier) = temp_contents
         reverseReferences(path) = Set.empty[String]
         logger.info("Updated Contents: %s\n".format(contents))
       } else {
@@ -318,6 +340,7 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       val path: String = contents(candidate)
       assert(reverseReferences.contains(path))
+      val tier: Tier = getTierFromPath(path)
       logger.info("Mark candidate for deletion: %s\n".format(candidate))
       markedForDeletion.add(path)
       terminateClients()
@@ -333,6 +356,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       logger.info("Reverse References: %s".format(reverseReferences))
       contents.remove(candidate)
       logger.info("Updated Contents: %s\n".format(contents))
+      val temp_contents: mutable.HashMap[Candidate,String]  = multiTierContents(tier)
+      temp_contents.remove(candidate)
+      multiTierContents(tier) = temp_contents
+      logger.info("Update Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, temp_contents))
       Future.successful(DeleteReply(path, format))
     }
 
@@ -389,12 +416,59 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
     private def printLoadWithIndices(caerusPlan: CaerusPlan): Unit = {
       caerusPlan match {
         case caerusLoadWithIndices: CaerusLoadWithIndices =>
-          logger.debug("CaerusLoadWithIndices path before serialization:")
+          logger.info("CaerusLoadWithIndices path before serialization:")
           for (path <- caerusLoadWithIndices.sources.map(_.path))
             logger.debug(path)
-          logger.debug("JSON Plan: %s".format(caerusLoadWithIndices.toJSON))
+          logger.info("JSON Plan: %s".format(caerusLoadWithIndices.toJSON))
         case _ =>
           caerusPlan.children.foreach(printLoadWithIndices)
+      }
+    }
+
+    private def insertCaerusWrite(
+                                   plan: CaerusPlan,
+                                   backupPlan: CaerusPlan,
+                                   caerusWrite: CaerusWrite,
+                                   caerusDelete: Option[CaerusDelete],
+                                 ): CaerusPlan = {
+      logger.info("SemanticCacheManager: Insert Caerus Write for plan:\n%s \n, backupPlan:\n%s \n, caeruswrite:\n%s \n, caerusdelete \n%s \n ".format(plan, backupPlan, caerusWrite,caerusDelete))
+      plan match {
+        case caerusCacheLoad: CaerusCacheLoad if caerusCacheLoad.sources == Seq(caerusWrite.name) =>
+          var caerusIf: CaerusIf = caerusWrite match {
+            case _: CaerusRepartitioning | _: CaerusCaching =>
+              CaerusIf(Seq(caerusWrite, plan, backupPlan))
+            case _ =>
+              logger.warn("Found caerus write %s, when we should only have Repartitioning and Caching"
+                .format(caerusWrite))
+              return plan
+          }
+          if (caerusDelete.isDefined)
+            caerusIf = CaerusIf(Seq(caerusDelete.get, caerusIf, caerusIf.children(2)))
+          logger.info("in caerusCacheLoad, returned plan \n %s".format(caerusIf))
+          caerusIf
+        case CaerusLoadWithIndices(_, loadChild, _, loadIndex) =>
+          logger.info("in caerusCacheLoad")
+          caerusWrite match {
+            case CaerusFileSkippingIndexing(name, _, index) if index == loadIndex =>
+              val caerusCacheLoad: CaerusCacheLoad =
+                loadChild.asInstanceOf[Project].child.asInstanceOf[Filter].child.asInstanceOf[CaerusCacheLoad]
+              if (caerusCacheLoad.sources == Seq(name)) {
+                var caerusIf = CaerusIf(Seq(caerusWrite, plan, backupPlan))
+                if (caerusDelete.isDefined)
+                  caerusIf = CaerusIf(Seq(caerusDelete.get, caerusIf, caerusIf.children(2)))
+                caerusIf
+              } else {
+                plan
+              }
+            case _ =>
+              plan
+          }
+        case _ =>
+          logger.info("in write else")
+          assert(plan.children.size == backupPlan.children.size)
+          val newChildren: Seq[CaerusPlan] = plan.children.indices.map(i =>
+            insertCaerusWrite(plan.children(i), backupPlan.children(i), caerusWrite, caerusDelete))
+          plan.withNewChildren(newChildren)
       }
     }
 
@@ -411,6 +485,10 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       val caerusPlan: CaerusPlan = CaerusPlan.fromJSON(request.caerusPlan)
       val availableContents: mutable.Map[Candidate,String] =
         contents.filter(element => !markedForDeletion.contains(element._2))
+      val availableMultiTierContents: mutable.HashMap[Tier, Map[Candidate,String]] = mutable.HashMap.empty[Tier, Map[Candidate,String]]
+      for((tier, contents) <- multiTierContents){
+        availableMultiTierContents(tier) = contents.filter(element => !markedForDeletion.contains(element._2)).toMap
+      }
       val optimizedPlan = {
         if (operationMode == Mode.MANUAL_WRITE) {
           optimizer.optimize(
@@ -419,18 +497,86 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
             path => addReference(request.clientId, path)
           )
         } else if (operationMode == Mode.FULLY_AUTOMATIC) {
-          val cap: Long = {
+          /*val cap: Long = {
             if (lastTier.isDefined)
               capacity(lastTier.get)
             else
               0L
-          }
-          planner.optimize(
+          }*/
+        /*  val initialOptimizedPlan:CaerusPlan = {
+            var allContents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
+            for((tier, contents) <- availableMultiTierContents){
+              allContents= allContents ++ contents
+            }
+            optimizer.optimize(caerusPlan, allContents.toMap, emptyAddReference)
+          }*/
+        val initialOptimizedPlan:CaerusPlan = caerusPlan
+          logger.info("Initial optimized plan without candidate: %s".format(initialOptimizedPlan))
+
+          val newMultiTierContents:Map[Tier, Map[Candidate,String]] = planner.optimize(
             caerusPlan,
-            availableContents.toMap[Candidate,String],
+            availableMultiTierContents.toMap,
             request.candidates.map(Candidate.fromJSON),
-            cap
+            capacity.toMap
           )
+          // so now we have new multi-tier contents, and will loop through tiers to issue write and eviction
+          var interOptimalPlan: mutable.HashMap[Tier, CaerusPlan] = mutable.HashMap.empty[Tier, CaerusPlan]
+          for((tier,contents) <- availableMultiTierContents ){
+            val newContents = newMultiTierContents(tier)
+            logger.info("New Multi-tire Contents. Tier: %s, Contents: %s\n".format(tier, newContents.mkString("\n")))
+            val top_can : Set[Candidate] = newContents.keySet -- contents.keySet
+            if(top_can.nonEmpty && top_can.size == 1){ // means we have a new candidate to write
+              val topCandidate: Candidate = top_can.head
+              val topCandidatePath = newContents(topCandidate)
+              logger.info("Top Candidate to write: %s, path: %s".format(topCandidate, topCandidatePath))
+              val caerusWrite: CaerusWrite = topCandidate match {
+                case Repartitioning(source, index, _) =>
+                  CaerusRepartitioning(topCandidatePath, source, index)
+                case FileSkippingIndexing(source, index, _) =>
+                  CaerusFileSkippingIndexing(topCandidatePath, source, index)
+                case Caching(cachedPlan, _) =>
+                  val optimizedCachedPlan = optimizer.optimize(cachedPlan, newContents - topCandidate, emptyAddReference)
+                  CaerusCaching(topCandidatePath, cachedPlan, optimizedCachedPlan)
+              }
+              val caerusDelete: Option[CaerusDelete] = if (!contents.keySet.subsetOf(newContents.keySet)) {
+                val deletedCandidates: Set[Candidate] = contents.keySet -- newContents.keySet
+                Some(CaerusDelete(deletedCandidates.toSeq.map(contents)))
+              } else {
+                None
+              }
+              val optimizedPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents, emptyAddReference)
+              val backupPlan: CaerusPlan = optimizer.optimize(caerusPlan, newContents-topCandidate, emptyAddReference)
+              interOptimalPlan(tier) = insertCaerusWrite(optimizedPlan, backupPlan, caerusWrite, caerusDelete)
+            }
+          }
+          var finalOptimizedPlan: CaerusPlan = initialOptimizedPlan
+          if(interOptimalPlan.isEmpty){
+            logger.info("No new Contents need to write/update, Doing last optimization with all contents from all tiers")
+            //so now we updated all the contents, will use all the contents, new and old to do one last optimization
+            var allContents : mutable.Map[Candidate,String] = mutable.Map.empty[Candidate,String]
+            for((tier, contents) <- newMultiTierContents){
+              logger.info("Add Contents from Tier: %s, to allContents:  %s\n".format(tier, contents.mkString("\n")))
+              for((c, p)<-contents){
+                if(allContents.contains(c)) {
+                  logger.info("Content already exist: %s".format(c))
+                  allContents.remove(c)
+                }
+                allContents(c) = p
+              }
+            }
+            logger.info("Contents from all the Tiers: %s\n".format(allContents.toMap.mkString("\n")))
+            finalOptimizedPlan = optimizer.optimize(caerusPlan, allContents.toMap, emptyAddReference)
+          }
+          else { // need to figure out a better way to pick plan, now simply pick plan from higher tier
+            for(tier<-Tier.values.toList.reverse){
+              if(interOptimalPlan.contains(tier)){
+                finalOptimizedPlan = interOptimalPlan(tier)
+                logger.info("optimize plan from tier %s : %s".format(tier, finalOptimizedPlan))
+              }
+            }
+          }
+          logger.info("Final optimized plan: %s".format(finalOptimizedPlan))
+          finalOptimizedPlan
         } else {
           val message = "Mode %s is not supported yet.".format(operationMode.id)
           logger.warn(message)
@@ -439,7 +585,8 @@ class SemanticCacheManager(execCtx: ExecutionContext, conf: Config) extends Lazy
       }
       logger.info("References: %s".format(references))
       logger.info("Reverse References: %s".format(reverseReferences))
-      // printLoadWithIndices(optimizedPlan)
+      logger.info("optimized CaerusPlan before send out: %s".format(optimizedPlan))
+      //printLoadWithIndices(optimizedPlan)
       Future.successful(OptimizationReply(optimizedCaerusPlan = optimizedPlan.toJSON))
     }
 

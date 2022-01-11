@@ -235,7 +235,8 @@ class SemanticCache(
           loadDF,
           loadDF.columns(index),
           Tier.STORAGE_DISK,
-          name.split(Path.SEPARATOR).last
+          name
+          //name.split(Path.SEPARATOR).last
         )
         if (bytesWritten >= 0) {
           CaerusTrue()
@@ -256,7 +257,8 @@ class SemanticCache(
           loadDF,
           loadDF.columns(index),
           Tier.STORAGE_DISK,
-          name.split(Path.SEPARATOR).last
+          name
+          //name.split(Path.SEPARATOR).last
         )
         if (bytesWritten >= 0) {
           CaerusTrue()
@@ -270,7 +272,8 @@ class SemanticCache(
           initialPlan,
           optimizedPlan,
           Tier.STORAGE_DISK,
-          name.split(Path.SEPARATOR).last
+          //name.split(Path.SEPARATOR).last
+          name
         )
         if (bytesWritten >= 0) {
           CaerusTrue()

@@ -56,7 +56,7 @@ case class BasicSizeEstimator() extends SizeEstimator {
           else if (hasFilter)
             BasicReadSizeInfo(writeSize / 5)
           else
-            BasicReadSizeInfo(writeSize)
+            BasicReadSizeInfo(writeSize / 10)
         }
         val sizeInfo = SizeInfo(writeSize, readSizeInfo)
         caching.sizeInfo = Some(sizeInfo)

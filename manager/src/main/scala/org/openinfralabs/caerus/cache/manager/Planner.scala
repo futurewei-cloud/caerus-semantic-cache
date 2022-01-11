@@ -1,5 +1,6 @@
 package org.openinfralabs.caerus.cache.manager
 
+import org.openinfralabs.caerus.cache.common.Tier.Tier
 import org.openinfralabs.caerus.cache.common.plans.CaerusPlan
 import org.openinfralabs.caerus.cache.common.{Caching, Candidate, FileSkippingIndexing, Repartitioning}
 
@@ -24,8 +25,8 @@ private[manager] abstract class Planner {
 
   def optimize(
     plan: CaerusPlan,
-    contents: Map[Candidate,String],
+    all_contents: Map[Tier, Map[Candidate,String]],
     candidates: Seq[Candidate],
-    capacity: Long,
-  ): CaerusPlan
+    capacity: Map[Tier, Long]
+  ): Map[Tier, Map[Candidate,String]]
 }
